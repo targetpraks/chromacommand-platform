@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Grid, Monitor, Music, Settings, Zap, BarChart3, LayoutGrid, LogOut } from "lucide-react";
+import { Grid, Monitor, Music, Settings, Zap, BarChart3, LayoutGrid, LogOut, HeartHandshake, Radio } from "lucide-react";
 import { motion } from "framer-motion";
 
 const navItems = [
@@ -13,6 +13,7 @@ const navItems = [
   { label: "Audio", icon: Music, href: "/audio", badge: null },
   { label: "Sync", icon: Zap, href: "/sync", badge: null },
   { label: "Analytics", icon: BarChart3, href: "/analytics", badge: null },
+  { label: "Sponsor", icon: HeartHandshake, href: "/sponsor", badge: "NEW" },
   { label: "Settings", icon: Settings, href: "/settings", badge: null },
 ];
 

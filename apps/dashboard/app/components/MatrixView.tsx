@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Filter, RefreshCw, Zap, Sun, Moon, ArrowUpRight } from "lucide-react";
+import { Filter, RefreshCw, Zap, Sun, Moon } from "lucide-react";
 import { StoreCard } from "./StoreCard";
 import { trpc } from "../lib/trpc";
+import { useLiveSocket } from "../hooks/useLiveSocket";
+import { useQueryClient } from "@tanstack/react-query";
 
 // Demo stores — fallback while loading
 const demoStores = [
@@ -61,8 +63,15 @@ export function MatrixView() {
   const [filter, setFilter] = useState("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data: dbStores, isLoading, refetch } = trpc.stores.list.useQuery(undefined, {
-    refetchInterval: 5000,
+  const queryClient = useQueryClient();
+
+  const { data: dbStores, isLoading, refetch } = trpc.stores.list.useQuery(undefined);
+
+  // Live WebSocket — refresh data on real-time events
+  useLiveSocket((msg) => {
+    if (msg.type === "rgb_update" || msg.type === "sync_complete" || msg.type === "audio_update" || msg.type === "store_status") {
+      void queryClient.invalidateQueries({ queryKey: [["stores", "list"]] });
+    }
   });
 
   // If DB data exists, use it. Otherwise fall back to demo data.

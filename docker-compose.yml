@@ -33,6 +33,20 @@ services:
       - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mqtt_data:/mosquitto/data
 
+  seed:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://postgres:***@postgres:5432/chromacommand
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./packages:/app/packages
+    command: sh -c "cd /app/packages/database && npx tsx seed.ts"
+    restart: "no"
+
   api:
     build:
       context: .
@@ -40,12 +54,11 @@ services:
     ports:
       - "4000:4000"
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/chromacommand
+      DATABASE_URL: postgresql://postgres:***@postgres:5432/chromacommand
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       NODE_ENV: development
     depends_on:
-      postgres:
-        condition: service_healthy
+      - seed
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages

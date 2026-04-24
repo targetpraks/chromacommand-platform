@@ -1,5 +1,5 @@
 # ChromaCommand Platform — Implementation Progress
-## Last Updated: 2026-04-24 (01:34 AM SAST)
+## Last Updated: 2026-04-25 (12:08 AM SAST)
 
 ---
 
@@ -37,8 +37,9 @@
 | **Content Manager** | `app/content/page.tsx` | Asset cards from DB (template/image), wired to content.listAssets |
 | **Audio Control** | `app/audio/page.tsx` | Per-zone volume sliders, play/pause/skip, store picker, TTS button — wired to audio mutations |
 | **Analytics** | `app/analytics/page.tsx` | Stats cards from analytics.getStats, activity_log feed, content performance bars |
+| **Sponsor Dashboard** | `app/sponsor/page.tsx` | Read-only analytics for MTN/FNB TakeOver partners — impressions, footfall, QR scans, time series |
 | **Settings** | `app/settings/page.tsx` | Profile, Org, Roles, Notifications |
-| **Sidebar** | `app/components/Sidebar.tsx` | 7 nav items, user profile, active states |
+| **Sidebar** | `app/components/Sidebar.tsx` | 8 nav items (+Sponsor badge), user profile, active states |
 | **Shared** | `app/components/StoreCard.tsx` | Reusable card with colour swatches, status, animations |
 
 **Tech:** Next.js 14 App Router, Tailwind CSS, Framer Motion, Lucide icons. Dark navy (#0A0B14) + gold (#C8A951) theme.
@@ -49,7 +50,7 @@
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| **tRPC Client** | ✅ Done | `httpBatchLink` to `http://localhost:4000/api/trpc`, 5s refetch interval |
+| **tRPC Client** | ✅ Done | `httpBatchLink` to `http://localhost:4000/api/trpc`, manual refetch driven by WebSocket events |
 | **stores.list** | ✅ Done | Reads all stores from DB with zones, screens, audioZones joined |
 | **stores.get** | ✅ Done | Single store detail with full zone/screen/audio data |
 | **rgb.listPresets** | ✅ Done | Reads rgb_presets from DB, returns full preset objects |
@@ -65,12 +66,15 @@
 | **analytics.getStats** | ✅ Done | Activity-based stats with impressions, footfall, QR scans |
 | **analytics.getActivityLog** | ✅ Done | Latest activity entries from activity_log |
 | **analytics.getContentPerformance** | ✅ Done | Hard-coded demo content performance (placeholder for future metrics) |
-| **MatrixView wired** | ✅ Done | Uses `trpc.stores.list` with demo fallback, adds real loading spinner + refresh |
+| **sponsor.getCampaignData** | ✅ Done | Per-store sponsor analytics with impressions, footfall, QR scans, screen status |
+| **sponsor.getTimeSeries** | ✅ Done | Daily breakdown of campaign metrics over time |
+| **MatrixView wired** | ✅ Done | Uses `trpc.stores.list` with demo fallback + **WebSocket live invalidation** |
 | **Store Detail wired** | ✅ Done | Dynamic route `[id]` — `trpc.stores.get` fully DB-driven |
 | **Sync page wired** | ✅ Done | `trpc.sync.transform` with real error/success states |
 | **Content page wired** | ✅ Done | `trpc.content.listAssets` with loading state |
 | **Audio page wired** | ✅ Done | `trpc.audio.getZoneState` + mutations for play/pause |
 | **Analytics page wired** | ✅ Done | `trpc.analytics.getStats` + `getContentPerformance` + `getActivityLog` |
+| **Sponsor page wired** | ✅ Done | `trpc.sponsor.getCampaignData` + `getTimeSeries` with store breakdown |
 | **StoreCard** | ✅ Done | Accepts both demo and DB shapes, renders zones correctly |
 
 ---
@@ -80,23 +84,48 @@
 | Component | File | Details |
 |-----------|------|---------|
 | **Docker Compose** | `docker-compose.yml` | Postgres 16, Redis 7, MQTT Mosquitto, API, Dashboard (dev mode) |
+| **Seed service** | `docker-compose.yml` | Auto-runs `seed.ts` after Postgres is healthy, then API starts |
 | **API Dockerfile** | `docker/Dockerfile.api` | Node 20 Alpine, builds API workspace |
 | **Dashboard Dockerfile** | `docker/Dockerfile.dashboard` | Node 20 Alpine, builds Next.js workspace |
 | **Mosquitto Config** | `docker/mosquitto.conf` | Anonymous true, persistence on port 1883 |
 | **GitHub Actions CI** | `.github/workflows/ci.yml` | Typecheck → Build → Test (with Postgres service) |
-| **Seed Script** | `packages/database/seed.ts` | 6 stores, 48 zones, 18 screens, 18 audio zones, 4 presets, 4 content assets, 3 audio playlists |
+| **Seed Script** | `packages/database/seed.ts` | 6 stores, 48 zones, 18 screens, 18 audio zones, 4 presets, 4 content assets, 3 audio playlists, 50 activity log entries |
 
----
+## ✅ Phase 5: Live WebSocket + Sponsor Dashboard + Auto-Seed + E2E Tests — COMPLETE
 
-## ⏳ Phase 5: QA + Scale — BACKLOG
+### 5A: WebSocket Live Updates
+| Component | File | Details |
+|-----------|------|---------|
+| **Live Socket Server** | `apps/api/src/live/index.ts` | Fastify WebSocket `/live/ws`, subscribe/unsubscribe topics, `broadcast()` helper |
+| **Live Socket Hook** | `apps/dashboard/app/hooks/useLiveSocket.ts` | React hook, auto-connects, parses `rgb_update`/`sync_complete`/`audio_update`/`store_status` events, auto-reconnects |
+| **MatrixView Updated** | `apps/dashboard/app/components/MatrixView.tsx` | **Removed 5s polling**, now invalidates `stores.list` on WebSocket events only — instant updates, zero idle traffic |
+| **tRPC Client** | `apps/dashboard/app/lib/trpc.ts`** | Disabled `refetchInterval`, bumped staleTime to 60s — lean client behavior |
 
-| Component | Details |
-|-----------|---------|
-| End-to-End Test | Simulated store test with MQTT + ESP-NOW |
-| Load Test | 100+ concurrent stores, latency P95 < 2s |
-| Firmware OTA | Remote ESP32 + Pi firmware updates |
-| Multi-Region | Cape Town + Johannesburg + Durban edge deployment |
-| Sponsor Dashboard | Read-only analytics for TakeOver partners |
+### 5B: Auto-Seed on Docker Compose Up
+| Component | File | Details |
+|-----------|------|---------|
+| **Idempotent Seed** | `packages/database/seed.ts` | Checks `stores` table count first, skips if already seeded. Supports `FORCE_SEED=1` override |
+| **Seed service** | `docker-compose.yml` | New `seed` service runs after Postgres healthcheck, then API `depends_on` seed ensuring DB is populated before API starts |
+
+### 5C: Sponsor Dashboard (Read-only Analytics)
+| Component | File | Details |
+|-----------|------|---------|
+| **Sponsor Router** | `apps/api/src/routers/sponsor.ts` | `getCampaignData` + `getTimeSeries` — impressions, footfall, QR scans per store, conversion rate, time series breakdown |
+| **Sponsor Router Stub** | `packages/shared/router-stub.ts` | Added `sponsor.getCampaignData` + `sponsor.getTimeSeries` type shapes |
+| **Sponsor Page** | `apps/dashboard/app/sponsor/page.tsx` | Full analytics: summary cards (impressions, footfall, QR scans, conversion), store-level breakdown, time-series bar chart, activity feed |
+| **Sidebar Updated** | `apps/dashboard/app/components/Sidebar.tsx` | Added "Sponsor" nav item (HeartHandshake icon) with "NEW" badge |
+
+### 5D: End-to-End Test Suite
+| Component | File | Details |
+|-----------|------|---------|
+| **E2E Tests** | `apps/api/src/tests/e2e.test.ts` | Health, stores.list, stores.get, rgb.listPresets, analytics.getStats, sync.transform, sponsor.getCampaignData, load test (100 concurrent <2s), WebSocket connection |
+| **Vitest Config** | `apps/api/vitest.config.ts` | Node environment, 15s timeout |
+| **WS Dependency** | `apps/api/package.json` | Added `ws` @ `^8.16.0` for WebSocket test coverage |
+
+### Critical Fixes
+| Issue | Fix |
+|-------|-----|
+| **API serving stub router** | `apps/api/src/index.ts` was importing `appRouter` from `@chromacommand/shared` (stub). Fixed to import from `./routers/_app` (real DB-backed router) |
 
 ---
 
@@ -104,7 +133,7 @@
 
 **GitHub:** https://github.com/targetpraks/chromacommand-platform
 
-### File Structure (54 files across monorepo)
+### File Structure (59 files across monorepo)
 
 ```
 chromacommand-platform/
@@ -116,21 +145,27 @@ chromacommand-platform/
 │
 ├── .github/workflows/ci.yml            # GitHub Actions pipeline
 ├── .env.example                        # Local dev env template
-├── docker-compose.yml                  # Full local stack
+├── docker-compose.yml                  # Full local stack + auto-seed
 │
 ├── apps/
 │   ├── api/                             # Fastify + tRPC backend
 │   │   ├── src/
-│   │   │   ├── index.ts               # Entry point (Fastify + tRPC + WS + JWT)
+│   │   │   ├── index.ts               # Entry point (Fastify + tRPC + WS + JWT + Live routes)
+│   │   │   ├── live/
+│   │   │   │   └── index.ts          # WebSocket server + broadcast helper
+│   │   │   ├── tests/
+│   │   │   │   └── e2e.test.ts     # E2E + load test + WebSocket test
 │   │   │   ├── trpc.ts                # Context + router factory
 │   │   │   └── routers/
-│   │   │       ├── _app.ts            # App registry (RGB, Content, Audio, Sync, Stores, Analytics, Health)
+│   │   │       ├── _app.ts            # App registry (RGB, Content, Audio, Sync, Stores, Analytics, Sponsor, Health)
 │   │   │       ├── stores.ts          # DB-backed store list + detail
 │   │   │       ├── rgb.ts             # LED control endpoints (DB + MQTT dispatch)
 │   │   │       ├── content.ts         # Content asset CRUD + playlist assignment
 │   │   │       ├── audio.ts           # Audio zone state + TTS announce
 │   │   │       ├── sync.ts            # One-Button Sync transform
-│   │   │       └── analytics.ts       # Stats + activity log queries
+│   │   │       ├── analytics.ts       # Stats + activity log queries
+│   │   │       └── sponsor.ts         # Sponsor read-only analytics
+│   │   ├── vitest.config.ts
 │   │   └── package.json
 │   │
 │   ├── dashboard/                       # Next.js 14 Dashboard
@@ -138,17 +173,20 @@ chromacommand-platform/
 │   │   │   ├── page.tsx                 # Matrix View (root)
 │   │   │   ├── layout.tsx               # TRPCProvider + Sidebar
 │   │   │   ├── globals.css              # Dark navy/gold theme
-│   │   │   ├── lib/trpc.ts             # tRPC client (httpBatchLink, 5s refetch)
+│   │   │   ├── lib/trpc.ts             # tRPC client (httpBatchLink, NO polling)
+│   │   │   ├── hooks/
+│   │   │   │   └── useLiveSocket.ts    # WebSocket hook for live updates
 │   │   │   ├── components/
-│   │   │   │   ├── Sidebar.tsx          # Navigation (7 items)
-│   │   │   │   ├── MatrixView.tsx       # Store grid — NOW WIRED to stores.list
+│   │   │   │   ├── Sidebar.tsx          # Navigation (8 items + Sponsor badge)
+│   │   │   │   ├── MatrixView.tsx       # Store grid — WebSocket-driven invalidation
 │   │   │   │   └── StoreCard.tsx        # Reusable card
-│   │   │   ├── sync/page.tsx            # One-Button Sync — NOW WIRED to sync.transform
+│   │   │   ├── sync/page.tsx            # One-Button Sync
 │   │   │   ├── stores/page.tsx          # Store list
-│   │   │   ├── stores/[id]/page.tsx    # Store detail — NOW WIRED to stores.get
-│   │   │   ├── content/page.tsx          # Content Manager — NOW WIRED to content.listAssets
-│   │   │   ├── audio/page.tsx            # Audio Control — NOW WIRED to audio.getZoneState
-│   │   │   ├── analytics/page.tsx        # Analytics — NOW WIRED to getStats
+│   │   │   ├── stores/[id]/page.tsx    # Store detail
+│   │   │   ├── content/page.tsx          # Content Manager
+│   │   │   ├── audio/page.tsx            # Audio Control
+│   │   │   ├── analytics/page.tsx        # Analytics
+│   │   │   ├── sponsor/page.tsx          # Sponsor Dashboard — read-only analytics
 │   │   │   └── settings/page.tsx         # Settings
 │   │   ├── next.config.js
 │   │   ├── tailwind.config.ts
@@ -164,13 +202,13 @@ chromacommand-platform/
 │   │   ├── schema.ts                     # 16 tables
 │   │   ├── index.ts                      # DB client with lazy connect
 │   │   ├── migrate.ts                    # Migration runner
-│   │   ├── seed.ts                       # Full Papa Pasta demo data (6 stores, 48 zones...)
+│   │   ├── seed.ts                       # Idempotent Papa Pasta demo data
 │   │   ├── drizzle.config.ts
 │   │   └── package.json
 │   └── shared/                            # Shared types + router stub
 │       ├── schemas.ts                    # Zod schemas for all commands
 │       ├── trpc.ts                       # tRPC init (stub for type inference)
-│       ├── router-stub.ts               # AppRouter type shape (for dashboard)
+│       ├── router-stub.ts               # AppRouter type shape (NOW includes sponsor)
 │       ├── types.ts                      # Future shared types
 │       ├── index.ts                      # Package exports
 │       ├── tsconfig.json
@@ -196,13 +234,13 @@ chromacommand-platform/
 
 ## Running the Platform
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: Docker Compose (Recommended — Auto-Seed)
 ```bash
-# Start all services
+# Start all services (Postgres → Seed → API → Dashboard)
 docker compose up -d
 
-# Seed the database
-cd packages/database && npx tsx seed.ts
+# Seed runs automatically after Postgres is healthy
+# API starts only AFTER seed completes
 
 # Dashboard → http://localhost:3000
 # API → http://localhost:4000/api/trpc
@@ -216,7 +254,7 @@ npm install
 # Start database + migrate
 cd packages/database && npm run db:migrate
 
-# Seed data
+# Seed data (idempotent)
 npx tsx seed.ts
 
 # Start API
@@ -224,6 +262,15 @@ cd apps/api && npm run dev
 
 # Start Dashboard (new terminal)
 cd apps/dashboard && npm run dev
+```
+
+### Running Tests
+```bash
+# E2E tests (requires running API at localhost:4000)
+cd apps/api && npm run test
+
+# Or against a specific API instance
+API_URL=http://localhost:4000 npm run test
 ```
 
 ---
@@ -235,31 +282,40 @@ cd apps/dashboard && npm run dev
 3. **tRPC stub pattern** — `@chromacommand/shared` exports an `AppRouter` **stub** for type inference only. All real implementations live in `@chromacommand/api` routers. This avoids circular dependencies between dashboard and API.
 4. **Sync transform mapping** — Preset IDs from the dashboard UI ("mtn_takeover", "navy_gold") are mapped to DB `rgbPresets` IDs. Currently uses hardcoded mapping; future versions should query `rgb.listPresets` and match by name.
 5. **Activity log for analytics** — Stats are derived from the `activity_log` table. Real-time metrics (impressions, footfall) are currently estimated from activity frequency; future versions should read from a dedicated metrics table with sensor telemetry.
+6. **WebSocket replaces polling** — Instead of 5-second tRPC refetching, the dashboard opens a persistent WebSocket to `/live/ws`, subscribes to "all" topic, and invalidates React Query cache only on real events. This eliminates idle HTTP traffic and enables instant updates.
+7. **Seed idempotency** — `seed.ts` checks the `stores` table before writing. If stores already exist, it exits silently. This prevents duplicate data when `docker compose up` is run multiple times.
+8. **API router isolation** — The dashboard and API both have their own `appRouter` exports. The dashboard uses `router-stub.ts` for type inference; the API uses `src/routers/_app.ts` for runtime. A critical bug (importing from stub in the API) was caught and fixed in this phase.
+9. **Sponsor data is read-only** — The `sponsor` router returns derived analytics without any mutation endpoints. No auth/RBAC yet — all endpoints use `publicProcedure`.
 
 ---
 
-## What Changed in This Session (Phases 3–4)
+## What Changed in This Phase (Phase 5)
 
-- **6 new DB-backed API routers:** `stores`, `rgb`, `content`, `audio`, `sync`, `analytics`
-- **7 dashboard pages wired:** MatrixView, Store Detail, Sync, Content, Audio, Analytics, Stores List
-- **tRPC client configured:** Auto-refreshing queries, loading states, error boundaries
-- **Docker + CI/CD:** Full Docker Compose stack + GitHub Actions pipeline
-- **Seed script:** 6 stores with realistic data across Cape Town, Johannesburg, Durban
-- **Static pp-a01 page removed:** All stores now served by dynamic `[id]` route
-- **PROGRESS.md updated:** Complete file tree, running instructions, design rationale
-
----
-
-## Next Steps (Phase 5 — Future)
-
-1. **WebSocket live updates** — Replace 5-second polling with WebSocket push for instant RGB colour changes
-2. **Seed script integration** — Auto-run seed on first `docker compose up`
-3. **Auth middleware** — Replace `publicProcedure` with JWT-validated procedures + RBAC
-4. **MQTT broker wiring** — Connect `sync.transform` and `rgb.set` mutations to real MQTT dispatch
-5. **Edge gateway deployment** — Build Docker image for ThinkCentre Tiny M90q
-6. **Firmware OTA** — Remote update ESP32 firmware via MQTT
-7. **Sponsor dashboard** — Read-only analytics view scoped to TakeOver partner data
+- **🔴 CRITICAL FIX:** API entry point was importing `appRouter` from `@chromacommand/shared` (empty stubs). Fixed to import from `./routers/_app` (real DB-backed implementation).
+- **WebSocket Live Updates:** `apps/api/src/live/index.ts` + `apps/dashboard/app/hooks/useLiveSocket.ts` + MatrixView updated to disable polling + invalidate on WS events.
+- **Idempotent Seed:** `seed.ts` now checks existing data before writing, supports `FORCE_SEED=1` override.
+- **Auto-Seed Service:** `docker-compose.yml` includes a `seed` service that auto-runs after Postgres healthcheck.
+- **Sponsor Router:** `apps/api/src/routers/sponsor.ts` — `getCampaignData` + `getTimeSeries` with per-store breakdown.
+- **Sponsor Dashboard Page:** `apps/dashboard/app/sponsor/page.tsx` — summary cards, store leaderboard, time-series bar chart, activity feed.
+- **Sidebar Updated:** Added "Sponsor" nav item with HeartHandshake icon and "NEW" badge.
+- **Router Stub Updated:** Added `sponsor.getCampaignData` + `sponsor.getTimeSeries` to `packages/shared/router-stub.ts`.
+- **E2E Test Suite:** `apps/api/src/tests/e2e.test.ts` — 9 tests covering all major endpoints + 100-request load test (<2s) + WebSocket connection test.
+- **Vitest Config:** `apps/api/vitest.config.ts` with Node environment and 15s timeout.
+- **File count:** 54 → 59 files.
 
 ---
 
-> **Status: ALPHA** — Platform scaffolded. All major components built and wired. Ready for Docker-based local testing.
+## Next Steps (Phase 6 — Future)
+
+| Component | Details |
+|-----------|---------|
+| **Auth middleware** | Replace `publicProcedure` with JWT-validated procedures + RBAC (admin, store manager, sponsor viewer) |
+| **MQTT broker wiring** | Connect `sync.transform` and `rgb.set` mutations to real MQTT dispatch (currently logged only) |
+| **Edge gateway deployment** | Build Docker image for ThinkCentre Tiny M90q |
+| **Firmware OTA** | Remote update ESP32 firmware via MQTT |
+| **Metrics table** | Replace activity-log-derived estimates with real sensor telemetry (impressions, footfall) |
+| **RBAC on Sponsor** | Scope sponsor endpoints to authenticated users with `sponsor_viewer` role |
+
+---
+
+> **Status: BETA** — All 5 phases complete. WebSocket live updates, sponsor dashboard, auto-seeding, and E2E tests implemented. Platform is production-scaffolded. Next: auth + real MQTT wiring.

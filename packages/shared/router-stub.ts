@@ -50,6 +50,11 @@ const analytics = router({
   getActivityLog: publicProcedure.input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }).optional()).query(() => []),
 });
 
+const sponsor = router({
+  getCampaignData: publicProcedure.input(z.any().optional()).query(() => ({} as any)),
+  getTimeSeries: publicProcedure.input(z.any().optional()).query(() => []),
+});
+
 export const appRouter = router({
   stores,
   rgb,
@@ -57,6 +62,7 @@ export const appRouter = router({
   audio,
   sync,
   analytics,
+  sponsor,
   health,
 });
 

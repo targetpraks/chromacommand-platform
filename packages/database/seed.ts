@@ -1,7 +1,19 @@
 import { db } from "./index";
 import * as schema from "./schema";
+import { eq, sql } from "drizzle-orm";
 
+/** Idempotent seed — safe to run multiple times. */
 async function seed() {
+  console.log("🌱 Checking seed state...");
+
+  const existingStoreCount = await db.select({ count: sql`COUNT(*)` }).from(schema.stores);
+  const count = Number(existingStoreCount[0]?.count ?? 0);
+  if (count > 0) {
+    console.log(`   ${count} stores already seeded — skipping.`);
+    console.log("   (Pass FORCE_SEED=1 to re-seed.)");
+    if (!process.env.FORCE_SEED) return;
+  }
+
   console.log("🌱 Seeding Papa Pasta demo data...");
 
   // ── Org ──
@@ -49,7 +61,6 @@ async function seed() {
     }
   }
 
-  // Split into chunks to avoid param limit
   for (let i = 0; i < zonesData.length; i += 50) {
     await db.insert(schema.ledZones).values(zonesData.slice(i, i + 50));
   }
@@ -90,10 +101,10 @@ async function seed() {
 
   // ── Content Assets ──
   await db.insert(schema.contentAssets).values([
-    { name: "Standard Menu", type: "template", htmlContent: "<div class=\"menu-board\"><h1>Papa Pasta</h1><div class=\"item\"><span>Fusilli Napoletana</span><span>R89</span></div></div>", css: ".menu-board { font-family: sans-serif; color: white; }", dimensions: { width: 1080, height: 1920 }, durationSeconds: 15, priority: 100, tags: ["menu", "standard"] },
-    { name: "Combo Deal — R149", type: "template", htmlContent: "<div class=\"promo\"><h2>Combo Deal</h2><p>Pasta + Drink</p><p class=\"price\">R149</p></div>", css: ".promo { text-align: center; color: #C8A951; }", dimensions: { width: 1920, height: 1080 }, durationSeconds: 10, priority: 80, tags: ["promo", "combo"] },
-    { name: "MTN TakeOver — Week 2", type: "template", htmlContent: "<div class=\"takeover\"><h1>MTN TakeOver</h1><p>Week 2 of 4</p></div>", css: ".takeover { background: #FFD100; color: black; text-align: center; }", dimensions: { width: 1920, height: 1080 }, durationSeconds: 20, priority: 200, tags: ["takeover", "mtn"] },
-    { name: "FNB Partner Board", type: "template", htmlContent: "<div class=\"partner\"><h1>FNB eBucks</h1><p>50% back in eBucks</p></div>", css: ".partner { background: #CBA135; color: black; }", dimensions: { width: 1920, height: 1080 }, durationSeconds: 15, priority: 150, tags: ["takeover", "fnb"] },
+    { name: "Standard Menu", type: "template", htmlContent: "<div class='menu-board'><h1>Papa Pasta</h1><div class='item'><span>Fusilli Napoletana</span><span>R89</span></div></div>", css: ".menu-board { font-family: sans-serif; color: white; }", dimensions: { width: 1080, height: 1920 }, durationSeconds: 15, priority: 100, tags: ["menu", "standard"] },
+    { name: "Combo Deal — R149", type: "template", htmlContent: "<div class='promo'><h2>Combo Deal</h2><p>Pasta + Drink</p><p class='price'>R149</p></div>", css: ".promo { text-align: center; color: #C8A951; }", dimensions: { width: 1920, height: 1080 }, durationSeconds: 10, priority: 80, tags: ["promo", "combo"] },
+    { name: "MTN TakeOver — Week 2", type: "template", htmlContent: "<div class='takeover'><h1>MTN TakeOver</h1><p>Week 2 of 4</p></div>", css: ".takeover { background: #FFD100; color: black; text-align: center; }", dimensions: { width: 1920, height: 1080 }, durationSeconds: 20, priority: 200, tags: ["takeover", "mtn"] },
+    { name: "FNB Partner Board", type: "template", htmlContent: "<div class='partner'><h1>FNB eBucks</h1><p>50% back in eBucks</p></div>", css: ".partner { background: #CBA135; color: black; }", dimensions: { width: 1920, height: 1080 }, durationSeconds: 15, priority: 150, tags: ["takeover", "fnb"] },
   ]);
 
   // ── Playlists ──
@@ -108,11 +119,22 @@ async function seed() {
     { name: "Ambient Dining", tracks: [{ title: "Soft Piano", url: "/audio/piano.mp3" }], tags: ["ambient", "dining"] },
   ]);
 
+  // ── Some activity log entries for analytics ──
+  const actions = ["rgb_set", "sync_transform", "audio_set", "screen_assign"];
+  const scopes = ["store", "zone"];
+  for (let i = 0; i < 50; i++) {
+    const store = stores[i % stores.length];
+    await db.insert(schema.activityLog).values({
+      action: actions[i % actions.length],
+      scope: scopes[i % scopes.length],
+      targetId: store.id,
+      details: { event: "demo", index: i },
+    });
+  }
+
   console.log("✅ Seed complete:");
   console.log(`   ${stores.length} stores, ${zonesData.length} LED zones, ${screensData.length} screens, ${audioData.length} audio zones`);
-  console.log(`   4 presets, 4 content assets, 1 playlist, 3 audio playlists`);
-
-  process.exit(0);
+  console.log(`   4 presets, 4 content assets, 1 playlist, 3 audio playlists, 50 activity log entries`);
 }
 
 seed().catch((err) => {
