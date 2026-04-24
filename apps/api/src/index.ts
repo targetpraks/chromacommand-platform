@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import jwt from "@fastify/jwt";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
-import { appRouter } from "./routers/_app";
+import { appRouter } from "@chromacommand/shared";
 import { createContext } from "./trpc";
 import dotenv from "dotenv";
 
@@ -22,7 +22,7 @@ async function main() {
   });
 
   await fastify.listen({ port: 4000, host: "0.0.0.0" });
-  fastify.log.info("🚀 ChromaCommand API listening on http://0.0.0.0:4000");
+  fastify.log.info("🚀 ChromaCommand API on http://0.0.0.0:4000");
 }
 
 main().catch((err) => {

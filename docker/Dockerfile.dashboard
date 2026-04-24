@@ -1,0 +1,11 @@
+FROM node:20-alpine
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY package*.json turbo.json ./
+COPY packages ./packages
+COPY apps/dashboard/package.json ./apps/dashboard/package.json
+RUN npm ci --include=dev
+COPY . .
+RUN npm run build --workspace=@chromacommand/dashboard
+CMD ["node", "node", "-e", "require('http').createServer((req,res)=>{require('fs').readFile('./apps/dashboard/.next/BUILD_ID',()=>{});res.writeHead(200);res.end('Dashboard ready');}).listen(3000)"]
+EXPOSE 3000

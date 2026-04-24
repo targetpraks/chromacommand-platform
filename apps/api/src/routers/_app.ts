@@ -1,26 +1,21 @@
-import { initTRPC } from "@trpc/server";
-import { FastifyRequest } from "fastify";
-
-export async function createContext({ req }: { req: FastifyRequest }) {
-  return { req, user: null as any };
-}
-
-const t = initTRPC.context<typeof createContext>().create();
-
-export const router = t.router;
-export const publicProcedure = t.procedure;
-
-// Routers
+import { router } from "../trpc";
+import { storesRouter } from "./stores";
 import { rgbRouter } from "./rgb";
-import { contentRouter, syncRouter, audioRouter, storesRouter } from "./content";
+import { contentRouter } from "./content";
+import { audioRouter } from "./audio";
+import { syncRouter } from "./sync";
+import { analyticsRouter } from "./analytics";
 
 export const appRouter = router({
+  stores: storesRouter,
   rgb: rgbRouter,
   content: contentRouter,
   audio: audioRouter,
   sync: syncRouter,
-  stores: storesRouter,
-  health: publicProcedure.query(() => ({ status: "ok", version: "1.0.0" })),
+  analytics: analyticsRouter,
+  health: router({
+    ping: router({ query: () => ({ status: "ok", version: "1.1.0" }) }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

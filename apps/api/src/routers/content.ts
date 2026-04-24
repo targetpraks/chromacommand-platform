@@ -1,91 +1,90 @@
 import { router, publicProcedure } from "../trpc";
 import { z } from "zod";
-import { ContentAsset, SyncTransformCommand } from "@chromacommand/shared";
+import { db } from "@chromacommand/database";
+import { contentAssets, playlists, playlistAssignments, activityLog, stores, screens as screensTable } from "@chromacommand/database/schema";
+import { eq, desc } from "drizzle-orm";
 
 export const contentRouter = router({
-  createAsset: publicProcedure
-    .input(ContentAsset)
-    .mutation(async ({ input }) => {
-      const assetId = input.assetId || `asset_${Date.now()}`;
-      return { assetId, status: "created" };
-    }),
-
   listAssets: publicProcedure
-    .input(z.object({ orgId: z.string().optional() }))
     .query(async () => {
-      return [];
+      const rows = await db.select().from(contentAssets).orderBy(desc(contentAssets.createdAt));
+      return rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        htmlContent: r.htmlContent,
+        css: r.css,
+        dimensions: r.dimensions,
+        durationSeconds: r.durationSeconds,
+        priority: r.priority,
+        tags: r.tags,
+        updated: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : "—",
+        size: "—",
+      }));
     }),
-});
 
-export const syncRouter = router({
-  transform: publicProcedure
-    .input(SyncTransformCommand)
+  createAsset: publicProcedure
+    .input(z.object({
+      name: z.string(),
+      type: z.enum(["html", "image", "video", "template"]),
+      htmlContent: z.string().optional(),
+      css: z.string().optional(),
+      dimensions: z.object({ width: z.number(), height: z.number() }).optional(),
+      durationSeconds: z.number().min(1).default(15),
+      priority: z.number().default(100),
+      tags: z.array(z.string()).default([]),
+      validFrom: z.string().optional(),
+      validUntil: z.string().optional(),
+    }))
     .mutation(async ({ input }) => {
-      const commandId = `sync_${Date.now()}`;
-      return {
-        commandId,
-        status: "dispatched",
-        components: input.components,
-        estimatedCompleteAt: new Date(Date.now() + input.fadeDurationMs).toISOString(),
-      };
-    }),
-});
+      const [row] = await db.insert(contentAssets).values({
+        name: input.name,
+        type: input.type,
+        htmlContent: input.htmlContent,
+        css: input.css,
+        dimensions: input.dimensions,
+        durationSeconds: input.durationSeconds,
+        priority: input.priority,
+        tags: input.tags,
+        validFrom: input.validFrom ? new Date(input.validFrom) : null,
+        validUntil: input.validUntil ? new Date(input.validUntil) : null,
+      }).returning();
 
-export const audioRouter = router({
-  set: publicProcedure
-    .input(
-      z.object({
-        scope: z.enum(["store", "region", "global"]),
-        targetId: z.string(),
-        zone: z.enum(["dining", "pickup", "exterior", "back-of-house"]),
-        playlistId: z.string(),
-        action: z.enum(["play", "pause", "stop", "skip", "duck"]),
-        volume: z.number().min(0).max(1).optional(),
-        fadeMs: z.number().min(0).optional(),
-      })
-    )
-    .mutation(async ({ input }) => {
-      return {
-        commandId: `audio_${Date.now()}`,
-        status: "dispatched",
-        mqttTopic: `chromacommand/store/${input.targetId}/audio/set/${input.zone}`,
-      };
+      await db.insert(activityLog).values({
+        action: "content_create",
+        scope: "global",
+        targetId: row.id,
+        details: { name: input.name, type: input.type },
+      });
+
+      return { assetId: row.id, status: "created" };
     }),
 
-  announce: publicProcedure
-    .input(
-      z.object({
-        scope: z.enum(["store", "region", "global"]),
-        targetId: z.string(),
-        zones: z.array(z.enum(["dining", "pickup", "exterior", "back-of-house"])),
-        text: z.string(),
-        voice: z.string().default("en-ZA-female-1"),
-        volume: z.number().min(0).max(1).default(0.7),
-        duckMusic: z.boolean().default(true),
-        priority: z.number().default(100),
-      })
-    )
-    .mutation(async ({ input }) => {
-      return {
-        commandId: `announce_${Date.now()}`,
-        status: "dispatched",
-        mqttTopic: `chromacommand/store/${input.targetId}/audio/announce`,
-      };
-    }),
-});
-
-export const storesRouter = router({
-  list: publicProcedure
-    .input(z.object({ regionId: z.string().optional() }))
+  listPlaylists: publicProcedure
     .query(async () => {
-      return [
-        { id: "pp-a01", name: "PP-A01 Cape Town CBD", region: "cape-town", status: "active" },
-      ];
+      return db.select().from(playlists).orderBy(desc(playlists.createdAt));
     }),
 
-  get: publicProcedure
-    .input(z.object({ id: z.string() }))
-    .query(async () => {
-      return { id: "pp-a01", name: "PP-A01 Cape Town CBD", region: "cape-town", status: "active" };
+  assignPlaylist: publicProcedure
+    .input(z.object({
+      playlistId: z.string(),
+      scope: z.enum(["store", "region", "global"]),
+      targetId: z.string(),
+      screenIds: z.array(z.string()).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      await db.insert(playlistAssignments).values({
+        playlistId: input.playlistId,
+        scope: input.scope,
+        targetId: input.targetId,
+      });
+      return { status: "assigned", scope: input.scope, targetId: input.targetId };
+    }),
+
+  storeScreens: publicProcedure
+    .input(z.object({ storeId: z.string() }))
+    .query(async ({ input }) => {
+      const rows = await db.select().from(screensTable).where(eq(screensTable.storeId, input.storeId));
+      return rows;
     }),
 });

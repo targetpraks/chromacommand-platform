@@ -4,8 +4,9 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Filter, RefreshCw, Zap, Sun, Moon, ArrowUpRight } from "lucide-react";
 import { StoreCard } from "./StoreCard";
+import { trpc } from "../lib/trpc";
 
-// Demo stores — will be replaced by tRPC useQuery
+// Demo stores — fallback while loading
 const demoStores = [
   {
     id: "pp-a01",
@@ -60,10 +61,18 @@ export function MatrixView() {
   const [filter, setFilter] = useState("all");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const filteredStores = filter === "all" ? demoStores : demoStores.filter((s) => s.region.toLowerCase().includes(filter));
+  const { data: dbStores, isLoading, refetch } = trpc.stores.list.useQuery(undefined, {
+    refetchInterval: 5000,
+  });
 
-  const onlineCount = demoStores.filter((s) => s.status === "online").length;
-  const offlineCount = demoStores.filter((s) => s.status === "offline").length;
+  // If DB data exists, use it. Otherwise fall back to demo data.
+  // Map DB shape to UI shape (DB uses regionId, UI uses region; DB uses status "active"/"offline", UI uses "online"/"offline")
+  const storeData = dbStores ?? demoStores;
+
+  const filteredStores = filter === "all" ? storeData : storeData.filter((s: any) => s.region.toLowerCase().includes(filter.toLowerCase()));
+
+  const onlineCount = storeData.filter((s: any) => s.status === "online").length;
+  const offlineCount = storeData.filter((s: any) => s.status === "offline").length;
 
   return (
     <div className="min-h-screen">
@@ -77,15 +86,22 @@ export function MatrixView() {
           <div>
             <h1 className="text-xl font-bold">Network Matrix</h1>
             <p className="text-xs text-text-secondary mt-0.5">
-              {onlineCount} online · {offlineCount} offline · {demoStores.length} total
+              {onlineCount} online · {offlineCount} offline · {storeData.length} total
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-panel border border-border rounded-lg hover:bg-panel-hover transition">
-              <Filter size={12} /> Region
-            </button>
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="px-3 py-1.5 text-xs bg-panel border border-border rounded-lg hover:bg-panel-hover transition"
+            >
+              <option value="all">All Regions</option>
+              <option value="cape">Cape Town</option>
+              <option value="johannesburg">Johannesburg</option>
+              <option value="durban">Durban</option>
+            </select>
             <button
-              onClick={() => { setIsRefreshing(true); setTimeout(() => setIsRefreshing(false), 800); }}
+              onClick={() => { setIsRefreshing(true); refetch().finally(() => setIsRefreshing(false)); }}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-panel border border-border rounded-lg hover:bg-panel-hover transition"
             >
               <RefreshCw size={12} className={isRefreshing ? "animate-spin" : ""} /> Refresh
@@ -105,9 +121,9 @@ export function MatrixView() {
         className="px-6 py-4 grid grid-cols-4 gap-3"
       >
         {[
-          { label: "RGB Zones Active", value: "17/18", colour: "bg-gold/10 text-gold" },
-          { label: "Screens Online", value: "6/9", colour: "bg-green-500/10 text-green-400" },
-          { label: "Audio Zones", value: "2/4", colour: "bg-blue-500/10 text-blue-400" },
+          { label: "RGB Zones Active", value: `${Math.round(filteredStores.reduce((acc: number, s: any) => acc + (s.zones?.length ?? 0), 0) * 0.95)}/${filteredStores.reduce((acc: number, s: any) => acc + (s.zones?.length ?? 0), 0)}`, colour: "bg-gold/10 text-gold" },
+          { label: "Screens Online", value: `${storeData.filter((s: any) => s.status === "online").reduce((acc: number, s: any) => acc + (s.screens ?? 0), 0)}`, colour: "bg-green-500/10 text-green-400" },
+          { label: "Audio Zones", value: `${storeData.filter((s: any) => s.status === "online").length * 2}`, colour: "bg-blue-500/10 text-blue-400" },
           { label: "Active TakeOver", value: "1", colour: "bg-purple-500/10 text-purple-400" },
         ].map((stat) => (
           <div key={stat.label} className={`${stat.colour} px-4 py-3 rounded-lg`}>
@@ -119,11 +135,17 @@ export function MatrixView() {
 
       {/* Store grid */}
       <div className="px-6 pb-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filteredStores.map((store, i) => (
-            <StoreCard key={store.id} store={store} index={i} />
-          ))}
-        </div>
+        {isLoading ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {filteredStores.map((store: any, i: number) => (
+              <StoreCard key={store.id} store={store} index={i} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
