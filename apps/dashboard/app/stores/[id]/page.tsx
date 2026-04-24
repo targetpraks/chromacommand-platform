@@ -21,7 +21,7 @@ export default function StoreDetailPage() {
     );
   }
 
-  const isOnline = store.status === "active";
+  const isOnline = store.status === "online";
 
   return (
     <div className="min-h-screen px-6 py-6">
