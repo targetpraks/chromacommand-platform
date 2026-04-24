@@ -5,11 +5,13 @@
 
 ## 1. Problem Statement
 
-The Papa Pasta franchise network requires a single, unified command platform that controls two real-time physical systems across every store:
+The Papa Pasta franchise network requires a single, unified command platform that controls three real-time physical systems across every store:
 
-1. **RGB Lighting** — Every store has LED strips (ceiling, window, counter, pickup, sign) that must change colour instantly for brand TakeOvers, seasonal themes, time-of-day schedules, or sponsor activations. Currently there is no way to push colour changes to 1 store or 100 stores simultaneously.
+1. **RGB Lighting** — Every store has dozens of LED zones (ceiling coves, window frames, undercounter strips, decorative accents, table edging, floor perimeter strips, exterior signage, and more) that must change colour instantly for brand TakeOvers, seasonal themes, time-of-day schedules, or sponsor activations. Currently there is no way to push colour changes to 1 store or 100 stores simultaneously.
 
 2. **Digital Menu Screens** — Every store has 3+ digital displays (Primary Menu, Combo Board, Promo Board) that must show real-time pricing, menu updates, and sponsor advertising content. Currently there is no CMS to push content across the network, and no offline resilience when internet drops.
+
+3. **In-Store Audio** — Every store plays ambient music that must shift in genre, tempo, and energy to match the brand TakeOver, time of day, or seasonal theme. Currently there is no way to synchronise audio with RGB + visual changes across the network.
 
 Without this platform, every store change (new sponsor, price update, seasonal menu) requires physical site visits, manual uploads, or store-by-store configuration. At 10 stores this is painful. At 100 stores it's impossible.
 
@@ -173,19 +175,102 @@ Push real-time colour control to every LED zone across every store. Support inst
 | **LED Strip** | WS2812B (5V, 60 LEDs/m) or APA102 (5V, 60 LEDs/m) | Analog RGB (no per-LED) | Addressable = per-LED colour control, animations |
 | **Controller Node** | ESP32-S3 (WiFi + BT) or RP2040 + ESP-01 | WLED pre-built board | Custom protocol, tight timing, cost ~R80/unit |
 | **Driver** | PWM + DMA | Software bit-bang | DMA offloads timing, stable at >1000 LEDs |
-| **Per Store Zones** | Ceiling, Window, Counter, Pickup, Sign | — | 5 zones = 5 controller nodes per store |
-| **Connectivity** | ESP-NOW (local mesh) + WiFi fallback | BLE only | ESP-NOW: <10ms latency, no router dependency |
-| **Wired Fallback** | RS-485 (500m range, noise immune) | I2C (short range) | RS-485 for long runs between zones |
+|| **Per Store Zones** | Unlimited / expandable (see 5.3) | — | Each zone = 1 controller node; zones grow with store fitout |
+|| **Max Controllers** | Up to 32 per store (ESP32-S3 mesh limit) | — | ESP-NOW supports 20 paired + broadcast; 32 with WiFi mesh |
+|| **Connectivity** | ESP-NOW (local mesh) + WiFi fallback | BLE only | ESP-NOW: <10ms latency, no router dependency |
+|| **Wired Fallback** | RS-485 (500m range, noise immune) + CAN bus | I2C (short range) | RS-485 for long runs; CAN for dense zones (tables, floor)|
 
 ### 5.3 LED Zone Configuration (Per Store)
 
 | Zone | LED Count | Position | Purpose |
 |------|-----------|----------|---------|
-| Ceiling | 300-500 | Recessed cove lighting | Ambient brand colour |
-| Window | 150-200 | Window frame (inside) | Street-facing brand colour |
-| Counter | 100-150 | Customer-facing counter | Accent colour, warm white for service |
-| Pickup | 80-100 | Pickup counter | Status indicator (ready = green, wait = gold) |
-| Sign | 200-300 | Exterior fascia sign | Logo illumination, sponsor colour |
+| **Ambient Zones** | | | |
+| Ceiling Cove | 300-500 | Recessed ceiling perimeter | Ambient brand colour, room fill |
+| Window Frame | 150-200 | Interior window frame | Street-facing brand colour, curb appeal |
+| Undercounter | 80-120 | Customer counter underside | Accent glow, counter depth |
+| **Decorative Zones** | | | |
+| Wall Wash | 200-400 | Back wall vertical wash | Wall colour, brand immersion |
+| Pillar Wrap | 60-100 | Structural column wrap | Vertical colour accent |
+| Archway | 100-150 | Door/archway frame | Entrance colour, transition sense |
+| Shelf Backlight | 50-80 | Menu shelf / display backlight | Product highlight |
+| **Furniture Zones** | | | |
+| Table Edge | 40-60 per table | Table perimeter strip | Per-table colour for sponsor zones |
+| Booth Coves | 80-120 | Built-in booth seating coves | Intimate lighting, sponsor accent |
+| Bar Front | 100-150 | Bar/counter front face | Bar focal point |
+| **Floor Zones** | | | |
+| Floor Perimeter | 200-400 | Floor edge along walls | Walking path illumination |
+| Floor Inlay | 50-100 | Logo or pattern inlay | Branded floor pattern |
+| Step Tread | 30-50 | Stairs / step edges | Safety + accent |
+| **Functional Zones** | | | |
+| Counter Front | 100-150 | Customer-facing counter front | Service line highlight |
+| Pickup Indicator | 80-100 | Pickup counter edge | Status: ready = green, wait = gold, error = red |
+| Kitchen Pass | 60-80 | Kitchen pass-through window | Staff visibility, service rhythm |
+| **Exterior Zones** | | | |
+| Signage Fascia | 200-300 | Exterior sign panel | Logo illumination, sponsor colour |
+| Awning Trim | 100-150 | Awning / canopy edge | Street presence, brand identity |
+| Entry Soffit | 60-100 | Entry ceiling / porch | Welcome glow |
+| **Estimated Average** | **1,500–3,500 LEDs** | Per store | Varies by fitout level |
+
+### 5.3a Zone Groups & Scenes
+
+Zones are organised into logical **groups** for bulk control:
+
+| Group | Zones Included | Use Case |
+|-------|----------------|----------|
+| `ambient` | Ceiling Cove, Window Frame, Undercounter | General store mood |
+| `decorative` | Wall Wash, Pillar Wrap, Archway, Shelf Backlight | Brand depth + texture |
+| `furniture` | Table Edge, Booth Coves, Bar Front | Intimate / focused lighting |
+| `floor` | Floor Perimeter, Floor Inlay, Step Tread | Path + safety + pattern |
+| `service` | Counter Front, Pickup Indicator, Kitchen Pass | Service flow + status |
+| `exterior` | Signage Fascia, Awning Trim, Entry Soffit | Street presence |
+| `all` | Every zone | Network-wide TakeOver |
+
+A **Scene** applies a colour preset to a group of zones simultaneously. E.g.:
+- Scene `"MTN TakeOver"` → `exterior: yellow, ambient: yellow-fade, furniture: gold-accent, service: green-pickup`
+- Scene `"Morning Open"` → `ambient: warm-white (60%), decorative: navy (40%), service: white (100%)`
+
+### 5.3b Adding New Zones
+
+The system is **zone-schema-driven**, not hardcoded:
+
+1. Technician connects a new LED strip to an ESP32-S3 (or adds to existing controller)
+2. Technician sends `PUT /api/v1/stores/{store_id}/zones` with zone metadata:
+   ```json
+   {
+     "zone_id": "pp-a01-booth-3",
+     "display_name": "Booth 3 Cove",
+     "group": "furniture",
+     "controller_mac": "aa:bb:cc:dd:ee:ff",
+     "led_count": 90,
+     "position": { "x": 12.5, "y": 8.2, "z": 0.0 },
+     "dimensions": { "width_m": 2.0, "height_m": 0.3 }
+   }
+   ```
+3. Cloud stores the new zone in `led_zones` table
+4. Gateway receives zone update via MQTT, caches locally
+5. Dashboard immediately shows new zone in the store detail view
+6. No firmware changes, no system restarts — zone is live immediately
+
+**Zone Schema:**
+```typescript
+interface LedZone {
+  id: string;              // e.g. "pp-a01-booth-3"
+  store_id: string;
+  display_name: string;     // Human-readable
+  group: string;            // ambient | decorative | furniture | floor | service | exterior
+  controller_mac: string;   // Associated ESP32 node
+  led_count: number;
+  position?: { x: number; y: number; z: number };  // 3D coordinates for 3D layout view
+  dimensions?: { width_m: number; height_m: number; depth_m?: number };
+  led_type: "WS2812B" | "APA102" | "SK6812";
+  voltage: number;          // 5V or 12V
+  max_brightness: number;   // 0.0 - 1.0 hardware limit
+  current_colour: string;   // hex
+  current_mode: string;     // solid | gradient | pulse | chase | breath | sparkle | wave | rainbow
+  status: "online" | "offline" | "setup";
+  created_at: Date;
+}
+```
 
 ### 5.4 RGB Control API
 
@@ -493,6 +578,176 @@ Single unified web dashboard that gives the operator command-center visibility a
 - JWT tokens with `scope` claim: `["store:pp-a01", "region:cape-town", "org:infx"]`
 - Every API endpoint checks `scope` against `target_id` in request
 - Row-level security in PostgreSQL: `WHERE store_id = ANY(current_user_stores())`
+
+---
+
+## 7a. Module 4 — Audio & Music Player
+
+### 7a.1 Purpose
+Every Papa Pasta store plays ambient audio — background music, brand soundscapes, seasonal themes, and sponsor jingles. The Audio Player module controls what plays in every store (or group of stores) from the Colour Matrix Hub, with one-button synchronisation across RGB + Content + Audio simultaneously.
+
+The Promise: Activate an MTN TakeOver and the entire store transforms — walls pulse yellow, screens show MTN content, and the speakers play MTN's brand soundscape. One button. Every sense.
+
+### 7a.2 Hardware Spec
+
+| Component | Spec | Rejected | Rationale |
+|-----------|------|----------|-----------|
+| **Player** | Raspberry Pi 5 (dedicated audio node) | Pi Zero (underpowered) | Pi 5: handles audio + local cache + MQTT client |
+| **DAC** | HiFiBerry DAC2 Pro (XLR out) | Onboard 3.5mm | Pro audio quality, line-level output, 24bit/192kHz |
+| **Amp** | Fosi Audio BT20A (100W × 2) | Built-in amp | Replaceable, high power, reliable |
+| **Speakers** | 2× ceiling-mounted 8ohm passive (50W each) | Bluetooth speakers | Wired = no latency, no pairing issues, reliable |
+| **Audio Zones** | Up to 4 per store | Single zone | Dining, pickup, exterior, back-of-house |
+| **Controls** | Volume, EQ, crossfade, ducking | — | Dining zone stays low; pickup zone louder |
+
+### 7a.3 Audio Zone Configuration
+
+| Zone | Speakers | Volume Range | Purpose |
+|------|----------|--------------|---------|
+| `dining` | 2× ceiling, store interior | 20% – 60% | Background ambience |
+| `pickup` | 1× pickup counter | 30% – 80% | Louder for customer pickup energy |
+| `exterior` | 1× awning / entry | 10% – 40% | Subtle street presence |
+| `back-of-house` | 1× kitchen | 0% – 30% | Staff alert sounds only |
+
+### 7a.4 Audio Sources
+
+| Source | Format | Delivery | Latency |
+|--------|--------|----------|---------|
+| **Playlist files** | MP3 320kbps / FLAC | Pre-cached from CDN | < 1s switch |
+| **Stream (live)** | Icecast / HLS | Internet stream | 2-5s (acceptable for ambience) |
+| **Text-to-speech** | WAV | Generated on edge | < 500ms |
+| **Scheduled announcements** | WAV | Pre-cached | < 500ms |
+
+### 7a.5 Music Presets & Themes
+
+A **Music Preset** is a pre-defined audio configuration that maps to a brand TakeOver or time-of-day theme:
+
+| Preset Name | Genre | Energy | Colour Match | Sponsor |
+|-------------|-------|--------|--------------|---------|
+| `papa_navy_gold` | Jazz-Hop, Lo-Fi | Calm, warm | Navy → Gold transition | — |
+| `morning_rush` | Upbeat House | High | Gold accent | — |
+| `mtn_yellow` | Afrobeats, Electronic | High | MTN Yellow | MTN |
+| `fnb_gold` | Lounge, Sophisticated | Calm-medium | Gold/Bronze | FNB |
+| `springbok_green` | SA Rock, Vuvuzela clips | Explosive | Green → Gold | Springboks |
+| `late_night` | Deep House, Chill | Low | Navy glow | — |
+
+### 7a.6 Sync API — One-Button Transformation
+
+**POST /api/v1/sync/transform**
+```json
+{
+  "scope": "store",
+  "target_id": "pp-a01",
+  "preset_id": "mtn_takeover_q2_2026",
+  "effective_at": "2026-05-01T06:00:00Z",
+  "fade_duration_ms": 3000,
+  "components": {
+    "rgb": true,
+    "content": true,
+    "audio": true
+  }
+}
+```
+
+**What happens:**
+1. At `06:00:00Z`, cloud dispatches 3 parallel MQTT messages:
+   - `chromacommand/store/pp-a01/rgb/set` → Colour transition to MTN Yellow (3s fade)
+   - `chromacommand/store/pp-a01/content/playlist` → Switch to MTN content playlist
+   - `chromacommand/store/pp-a01/audio/playlist` → Crossfade to MTN soundscape
+2. Edge gateway receives all 3, sequences them within same tick
+3. RGB: 3s fade from Navy → Yellow
+4. Content: Crossfade to MTN promo loop on all screens
+5. Audio: Crossfade (3s) from current track → MTN soundscape
+6. All 3 complete within 3.5 seconds of each other
+7. Dashboard shows "Transform complete" with all 3 confirmation ticks
+
+### 7a.7 Audio Control API
+
+**POST /api/v1/audio/set**
+```json
+{
+  "scope": "store",
+  "target_id": "pp-a01",
+  "zone": "dining",        // "dining" | "pickup" | "exterior" | "back-of-house"
+  "playlist_id": "pl_mtn_soundscape",
+  "action": "play",        // "play" | "pause" | "stop" | "skip" | "duck"
+  "volume": 0.45,          // 0.0 – 1.0
+  "fade_ms": 2000,
+  "eq": {
+    "bass": 2,             // -10 to +10
+    "mid": 0,
+    "treble": 1
+  },
+  "ducking": {
+    "enabled": true,       // Lower volume during announcements
+    "duck_to": 0.15,
+    "restore_after_ms": 5000
+  }
+}
+```
+
+**POST /api/v1/audio/announce** — Override everything for TTS announcement:
+```json
+{
+  "scope": "store",
+  "target_id": "pp-a01",
+  "zones": ["dining", "pickup"],
+  "text": "Order number 247 ready for collection at the pickup counter.",
+  "voice": "en-ZA-female-1",
+  "volume": 0.70,
+  "duck_music": true,
+  "priority": 100
+}
+```
+
+### 7a.8 Edge Gateway Audio Stack
+
+**Pi 5 Audio Node Software:**
+- **OS**: Raspberry Pi OS Lite (Bookworm)
+- **Runtime**: Node.js 20 + `mpd` (Music Player Daemon)
+- **Cache**: SQLite for playlist manifest + filesystem for MP3/FLAC files
+- **Streaming**: `mpc` / `ncmpcpp` client to MPD for gapless playback
+- **TTS**: Piper TTS (local) or ElevenLabs API (if internet)
+- **Crossfade**: MPD built-in crossfade (configurable ms)
+- **Volume**: `amixer` / `alsamixer` controlled via MQTT commands
+- **Sync**: NTP for clock sync + MQTT command timestamp alignment
+
+### 7a.9 Offline Behaviour
+
+1. Edge gateway stores last 10 playlists locally (approx. 500MB)
+2. On boot: MPD loads last active playlist immediately
+3. If internet drops: local playlist continues, repeat mode enabled
+4. When connection returns: next scheduled track updates, playlist refresh
+
+### 7a.10 One-Button TakeOver Sequence
+
+```
+Operator clicks "Activate MTN TakeOver" in Dashboard
+  │
+  ▼
+Cloud validates: store available, slot active, all systems green
+  │
+  ▼
+Cloud dispatches 3 MQTT commands with SAME timestamp + 3s fade:
+  ├─ RGB:    chromacommand/store/pp-a01/rgb/set/all
+  │           → { colour: "#FFD100", mode: "fade", duration_ms: 3000 }
+  ├─ Content: chromacommand/store/pp-a01/content/playlist
+  │           → { playlist_id: "pl_mtn_full", crossfade: true }
+  └─ Audio:   chromacommand/store/pp-a01/audio/playlist
+              → { playlist_id: "pl_mtn_afrobeats", fade_ms: 3000 }
+  │
+  ▼
+Edge Gateway receives all 3 within 200ms
+  │
+  ▼
+Gateway queues commands by timestamp, executes simultaneously:
+  ├─ T+0ms:  RGB begins fade (3s)
+  ├─ T+0ms:  Player begins content crossfade (3s)
+  └─ T+0ms:  MPD begins audio crossfade (3s)
+  │
+  ▼
+T+3000ms: All 3 complete. Store is fully MTN.
+Dashboard shows: ✅ RGB | ✅ Content | ✅ Audio
+```
 
 ---
 
