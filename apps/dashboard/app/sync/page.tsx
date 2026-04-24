@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Zap, Check, Clock, AlertTriangle, Lightbulb, Monitor, Music, ArrowRight } from "lucide-react";
+import { trpc } from "../lib/trpc";
 
 interface SyncPreset {
   id: string;
@@ -61,25 +62,46 @@ const syncPresets: SyncPreset[] = [
 export default function SyncPage() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [scope, setScope] = useState("global");
-  const [isExecuting, setIsExecuting] = useState(false);
   const [executionResult, setExecutionResult] = useState<string | null>(null);
 
+  const { data: presets } = trpc.rgb.listPresets.useQuery();
+  const syncMutation = trpc.sync.transform.useMutation({
+    onSuccess: (data) => {
+      setExecutionResult(`✅ "${selectedPresetName}" activated across ${scope === "global" ? "all stores" : scope} · Command ${data.commandId}`);
+    },
+    onError: (err) => {
+      setExecutionResult(`❌ Failed: ${err.message}`);
+    },
+  });
+
+  const selectedPresetName = syncPresets.find(p => p.id === selectedPreset)?.name ?? "";
+
   const handleTransform = async (preset: SyncPreset) => {
-    setIsExecuting(true);
     setExecutionResult(null);
+    // Map preset ID to DB preset id; in production this would be a proper mapping
+    const dbPresetId = preset.id === "mtn_takeover" ? preset.id :
+                        preset.id === "fnb_takeover" ? preset.id :
+                        preset.id === "late_night" ? preset.id : "navy_gold";
 
-    console.log("Executing sync transform:", preset.name, {
-      scope,
+    // Determine actual scope/target
+    let actualScope: "global" | "region" | "store" = "global";
+    let targetId = "all";
+    if (scope.startsWith("region-")) {
+      actualScope = "region";
+      targetId = scope === "region-cpt" ? "cape-town" : "johannesburg";
+    } else if (scope.startsWith("store-")) {
+      actualScope = "store";
+      targetId = "pp-a01";
+    }
+
+    await syncMutation.mutateAsync({
+      scope: actualScope,
+      targetId,
+      presetId: dbPresetId,
+      effectiveAt: new Date().toISOString(),
       fadeDurationMs: 3000,
-      rgb: preset.primary,
-      content: preset.contentPlaylist,
-      audio: preset.musicPreset,
+      components: { rgb: true, content: true, audio: true },
     });
-
-    setTimeout(() => {
-      setIsExecuting(false);
-      setExecutionResult(`✅ "${preset.name}" activated across ${scope === "global" ? "all stores" : scope} in 3.2s`);
-    }, 2500);
   };
 
   return (
@@ -121,7 +143,7 @@ export default function SyncPage() {
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4">
         {syncPresets.map((preset, i) => {
           const isSelected = selectedPreset === preset.id;
-          const isExecutingThis = isExecuting && isSelected;
+          const isExecuting = syncMutation.isPending && isSelected;
           const isDone = executionResult !== null && isSelected && !isExecuting;
 
           return (
@@ -161,7 +183,7 @@ export default function SyncPage() {
                     <div className="w-8 h-8 rounded-full bg-green-500/15 flex items-center justify-center">
                       <Check size={14} className="text-green-400" />
                     </div>
-                  ) : isExecutingThis ? (
+                  ) : isExecuting ? (
                     <div className="w-8 h-8 rounded-full bg-gold/15 flex items-center justify-center animate-pulse">
                       <Clock size={14} className="text-gold" />
                     </div>
@@ -194,10 +216,10 @@ export default function SyncPage() {
                 >
                   <button
                     onClick={() => handleTransform(preset)}
-                    disabled={isExecuting}
+                    disabled={syncMutation.isPending}
                     className="w-full py-3 bg-gold text-navy font-semibold text-sm rounded-lg hover:bg-gold/90 transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
-                    {isExecuting ? (
+                    {syncMutation.isPending ? (
                       <>Transforming... <Clock size={14} className="animate-spin" /></>
                     ) : (
                       <><Zap size={14} strokeWidth={2.5} /> Activate {preset.name}</>

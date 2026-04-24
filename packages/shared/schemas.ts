@@ -1,26 +1,11 @@
 import { z } from "zod";
 
-// ─── Shared Types & Zod Schemas ─────────────────────────────────────────
-
 export const ZoneGroup = z.enum([
-  "ambient",
-  "decorative",
-  "furniture",
-  "floor",
-  "service",
-  "exterior",
-  "all",
+  "ambient", "decorative", "furniture", "floor", "service", "exterior", "all",
 ]);
 
 export const ColourMode = z.enum([
-  "solid",
-  "gradient",
-  "pulse",
-  "chase",
-  "breath",
-  "sparkle",
-  "wave",
-  "rainbow",
+  "solid", "gradient", "pulse", "chase", "breath", "sparkle", "wave", "rainbow",
 ]);
 
 export const RgbColour = z.object({
@@ -36,13 +21,11 @@ export const RgbSetCommand = z.object({
   targetId: z.string(),
   zone: z.string().optional(),
   colour: RgbColour,
-  schedule: z
-    .object({
-      startAt: z.string().datetime(),
-      endAt: z.string().datetime().optional(),
-      fadeDurationMs: z.number().min(0).max(10000).default(2000),
-    })
-    .optional(),
+  schedule: z.object({
+    startAt: z.string().datetime(),
+    endAt: z.string().datetime().optional(),
+    fadeDurationMs: z.number().min(0).max(10000).default(2000),
+  }).optional(),
 });
 
 export const ContentAsset = z.object({
@@ -58,10 +41,7 @@ export const ContentAsset = z.object({
 });
 
 export const AudioZoneType = z.enum([
-  "dining",
-  "pickup",
-  "exterior",
-  "back-of-house",
+  "dining", "pickup", "exterior", "back-of-house",
 ]);
 
 export const SyncTransformCommand = z.object({
@@ -77,15 +57,7 @@ export const SyncTransformCommand = z.object({
   }),
 });
 
-// Types
-type RgbColourType = z.infer<typeof RgbColour>;
-type RgbSetCommandType = z.infer<typeof RgbSetCommand>;
-type ContentAssetType = z.infer<typeof ContentAsset>;
-type SyncTransformCommandType = z.infer<typeof SyncTransformCommand>;
-
-export type {
-  RgbColourType,
-  RgbSetCommandType,
-  ContentAssetType,
-  SyncTransformCommandType,
-};
+export type RgbColourType = z.infer<typeof RgbColour>;
+export type RgbSetCommandType = z.infer<typeof RgbSetCommand>;
+export type ContentAssetType = z.infer<typeof ContentAsset>;
+export type SyncTransformCommandType = z.infer<typeof SyncTransformCommand>;
