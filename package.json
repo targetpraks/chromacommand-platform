@@ -1,0 +1,28 @@
+{
+  "name": "chromacommand-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unified RGB + Digital Menu + Audio control platform for Papa Pasta franchise network",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate",
+    "db:studio": "turbo run db:studio",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  },
+  "packageManager": "npm@10.7.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
