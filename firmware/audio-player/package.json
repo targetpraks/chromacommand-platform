@@ -1,0 +1,13 @@
+{
+  "name": "chromacommand-audio-player",
+  "version": "1.0.0",
+  "private": true,
+  "main": "audio.js",
+  "scripts": {
+    "start": "node audio.js",
+    "dev": "NODE_ENV=development node audio.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.3.0"
+  }
+}
