@@ -1,10 +1,9 @@
-import { FastifyRequest } from "fastify";
-import { initTRPC } from "@trpc/server";
+import type { FastifyRequest } from "fastify";
+import { userFromRequest, router, publicProcedure, protectedProcedure, requireScope, requireRole, type Ctx } from "./auth";
 
-export async function createContext({ req }: { req: FastifyRequest }) {
-  return { req, user: null as any };
+export async function createContext({ req }: { req: FastifyRequest }): Promise<Ctx> {
+  const user = await userFromRequest(req);
+  return { req, user };
 }
 
-const t = initTRPC.context<typeof createContext>().create();
-export const router = t.router;
-export const publicProcedure = t.procedure;
+export { router, publicProcedure, protectedProcedure, requireScope, requireRole };

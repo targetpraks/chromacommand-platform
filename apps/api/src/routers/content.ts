@@ -1,4 +1,4 @@
-import { router, publicProcedure } from "../trpc";
+import { router, protectedProcedure as publicProcedure, requireRole } from "../trpc";
 import { z } from "zod";
 import { db } from "@chromacommand/database";
 import { contentAssets, playlists, playlistAssignments, activityLog, stores, screens as screensTable } from "@chromacommand/database/schema";
@@ -23,7 +23,7 @@ export const contentRouter = router({
       }));
     }),
 
-  createAsset: publicProcedure
+  createAsset: requireRole("hq_admin", "regional_manager")
     .input(z.object({
       name: z.string(),
       type: z.enum(["html", "image", "video", "template"]),
@@ -65,7 +65,7 @@ export const contentRouter = router({
       return db.select().from(playlists).orderBy(desc(playlists.createdAt));
     }),
 
-  assignPlaylist: publicProcedure
+  assignPlaylist: requireRole("hq_admin", "regional_manager")
     .input(z.object({
       playlistId: z.string(),
       scope: z.enum(["store", "region", "global"]),

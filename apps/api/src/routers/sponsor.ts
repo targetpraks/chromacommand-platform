@@ -1,4 +1,5 @@
-import { router, publicProcedure } from "../trpc";
+import { router, requireRole } from "../trpc";
+const publicProcedure = requireRole("hq_admin", "sponsor_viewer", "regional_manager");
 import { z } from "zod";
 import { db } from "@chromacommand/database";
 import { stores, ledZones, screens, activityLog } from "@chromacommand/database/schema";

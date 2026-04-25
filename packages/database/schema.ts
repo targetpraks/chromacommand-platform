@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, jsonb, timestamp, float, boolean, inet, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, jsonb, timestamp, float, boolean, inet, integer, bigserial, doublePrecision, index } from "drizzle-orm/pg-core";
 
 export const orgs = pgTable("orgs", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -170,4 +170,38 @@ export const activityLog = pgTable("activity_log", {
   ipAddress: inet("ip_address"),
   userAgent: text("user_agent"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const sensorTelemetry = pgTable("sensor_telemetry", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  storeId: varchar("store_id", { length: 32 }).notNull().references(() => stores.id),
+  sensorId: varchar("sensor_id", { length: 64 }).notNull(),
+  metric: varchar("metric", { length: 32 }).notNull(),
+  value: doublePrecision("value").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  byStoreMetric: index("idx_telemetry_store_metric_time").on(t.storeId, t.metric, t.recordedAt),
+  byTime: index("idx_telemetry_recorded_at").on(t.recordedAt),
+}));
+
+export const deviceHeartbeats = pgTable("device_heartbeats", {
+  deviceId: varchar("device_id", { length: 64 }).primaryKey(),
+  deviceType: varchar("device_type", { length: 32 }).notNull(),
+  storeId: varchar("store_id", { length: 32 }).notNull().references(() => stores.id),
+  lastSeen: timestamp("last_seen", { withTimezone: true }).notNull(),
+  ipAddress: inet("ip_address"),
+  firmwareVersion: varchar("firmware_version", { length: 32 }),
+});
+
+export const syncTransactions = pgTable("sync_transactions", {
+  commandId: varchar("command_id", { length: 64 }).primaryKey(),
+  scope: varchar("scope", { length: 16 }).notNull(),
+  targetId: varchar("target_id", { length: 32 }).notNull(),
+  presetIdBefore: uuid("preset_id_before"),
+  presetIdAfter: uuid("preset_id_after"),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  ackState: jsonb("ack_state").default("{}"),
+  initiatedBy: uuid("initiated_by"),
 });

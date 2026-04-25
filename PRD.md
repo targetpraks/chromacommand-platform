@@ -1296,3 +1296,146 @@ Each store's ThinkCentre Tiny is provisioned with:
 - Briefing & Lead Capture UX (`canvas-Io8peObJXb`)
 - RGB Lighting Control System page (placeholder in Coda)
 - Digital Menu Display Manager page (placeholder in Coda)
+
+---
+
+## 20. Observability & SLOs (added v1.2)
+
+### 20.1 Metrics Catalog
+
+Prometheus metrics exposed at `/metrics` on the API (`port 4000`) and on each edge gateway (`port 9100`).
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `cc_api_requests_total` | counter | `route, method, status` | API throughput + error rate |
+| `cc_api_request_duration_seconds` | histogram | `route, method` | API latency |
+| `cc_mqtt_publish_total` | counter | `topic_root, qos, result` | Command dispatch volume / failures |
+| `cc_mqtt_publish_duration_seconds` | histogram | `topic_root` | Broker round-trip |
+| `cc_command_ack_latency_seconds` | histogram | `command_type, store_id` | End-to-end command → ack |
+| `cc_store_online` | gauge | `store_id, region` | 1 = online, 0 = offline |
+| `cc_store_last_heartbeat_seconds` | gauge | `store_id` | Seconds since last heartbeat |
+| `cc_screen_online` | gauge | `screen_id, store_id, type` | Per-screen liveness |
+| `cc_led_zone_online` | gauge | `zone_id, store_id, group` | Per-zone liveness |
+| `cc_audio_zone_online` | gauge | `zone_id, store_id` | Per-audio-zone liveness |
+| `cc_sensor_footfall_total` | counter | `store_id` | Pedestrian count |
+| `cc_sensor_temperature_celsius` | gauge | `store_id, sensor_id` | R638 fridge temp |
+| `cc_telemetry_ingest_lag_seconds` | histogram | `store_id` | Edge → cloud telemetry lag |
+
+### 20.2 SLOs
+
+| SLO | Target | Window | Alert Threshold |
+|-----|--------|--------|-----------------|
+| API availability | 99.5% | 30d rolling | < 99.0% over 1h |
+| API P95 latency | < 200ms | 30d rolling | > 500ms for 5m |
+| Command dispatch (rgb.set) P95 → ack | < 2s | 7d rolling | > 5s for 5m |
+| Store online ratio | ≥ 95% | 24h rolling | < 90% for 15m |
+| Telemetry ingest lag P99 | < 5min | 24h | > 15min for 10m |
+
+### 20.3 Alert Routing
+
+- **Page (PagerDuty)**: API down, MQTT broker down, > 20% stores offline
+- **Slack #cc-ops**: Single store offline > 30min, R638 temp > 5°C, command ack failure rate > 5%
+- **Email digest (daily)**: SLO burn rate, top 5 noisy stores, OTA update failures
+
+---
+
+## 21. MQTT Reliability & Idempotency (added v1.2)
+
+### 21.1 QoS Per Topic Class
+
+| Topic Pattern | QoS | Retained | Rationale |
+|---------------|-----|----------|-----------|
+| `chromacommand/+/+/rgb/set/#` | 1 | false | At-least-once; idempotent via command_id |
+| `chromacommand/+/+/rgb/state/#` | 1 | true | Last-known state retained for new subscribers |
+| `chromacommand/+/+/content/playlist` | 1 | true | Player on reconnect gets current playlist |
+| `chromacommand/+/+/content/state` | 0 | false | Frequent, lossy ok |
+| `chromacommand/+/+/audio/set/#` | 1 | false | At-least-once; idempotent via command_id |
+| `chromacommand/+/+/telemetry/heartbeat` | 0 | false | Lossy ok; gauge tracks last seen |
+| `chromacommand/+/+/telemetry/sensors` | 1 | false | Don't lose footfall counts |
+| `chromacommand/+/+/screens/discover` | 1 | false | Must reach cloud at least once |
+| `chromacommand/+/+/screens/register` | 1 | true | New device on reconnect gets its assignment |
+
+### 21.2 Idempotency
+
+Every command-bearing payload includes `command_id` (ULID). Edge gateway stores the last 1000 `command_id`s in SQLite ring buffer; duplicate `command_id` is acked but not re-applied. Cloud reconciliation ignores `state` updates with `timestamp < current_state.timestamp`.
+
+### 21.3 One-Button Sync — Transactional Semantics
+
+- **Compensation**, not 2PC: if any of the 3 sub-commands (RGB / content / audio) returns no ack within `fade_duration_ms + 5000ms`, the dashboard surfaces a **partial** state with which subsystems succeeded.
+- The operator can click **Rollback** which dispatches the previous preset (recorded in `sync_transactions` table with `command_id, preset_id_before, preset_id_after, started_at, completed_at, ack_state`).
+- No automatic rollback — operator decides (e.g. "audio failed but visuals look right, leave it").
+
+---
+
+## 22. Edge Gateway Provisioning (added v1.2)
+
+### 22.1 Bootstrap Flow
+
+1. Tech flashes Ubuntu Server 24.04 to the ThinkCentre's NVMe.
+2. First boot: cloud-init runs `provision.sh` from a USB stick (or the official ChromaCommand bootstrap URL over LTE if WAN is up).
+3. `provision.sh`:
+   - Generates an Ed25519 keypair on the device, never leaves the box.
+   - Reads the printed **provisioning code** (8-char alphanumeric, single-use, paired in dashboard with a `store_id`) from the operator and POSTs the public key + provisioning code to `https://api.chromacommand.io/provision/claim`.
+   - Cloud verifies the code, signs a per-device X.509 client cert (CN = `store_id`, valid 365d) using the internal CA, returns the cert + chain + the broker URL + `store_id`.
+   - Cert is written to `/etc/chromacommand/cert.pem` (mode 0600, owner `chromacommand`).
+4. Compose stack pulls and starts; gateway connects to MQTT broker over mTLS on port 8883.
+5. Cert auto-renews 30 days before expiry via the same provisioning endpoint, authenticated with the existing cert.
+
+### 22.2 EMQX ACL Rules
+
+```
+# Each device may only publish/subscribe to its own store path.
+{allow, {clientid, "^store-(.+)$"}, all, ["chromacommand/store/${1}/#"]}.
+{deny, all}.
+```
+
+User accounts get JWT-based auth into the broker (mapped from API JWT) with the same per-store ACL pattern.
+
+---
+
+## 23. Sensor Telemetry Storage (added v1.2)
+
+### 23.1 Schema
+
+```sql
+CREATE TABLE sensor_telemetry (
+  id BIGSERIAL PRIMARY KEY,
+  store_id VARCHAR(32) NOT NULL REFERENCES stores(id),
+  sensor_id VARCHAR(64) NOT NULL,
+  metric VARCHAR(32) NOT NULL,    -- footfall | temperature | queue_minutes | impressions | qr_scan
+  value DOUBLE PRECISION NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_telemetry_store_metric_time ON sensor_telemetry(store_id, metric, recorded_at DESC);
+CREATE INDEX idx_telemetry_recorded_at ON sensor_telemetry(recorded_at DESC);
+
+CREATE TABLE device_heartbeats (
+  device_id VARCHAR(64) PRIMARY KEY,
+  device_type VARCHAR(32) NOT NULL,  -- gateway | screen | led_controller | audio_player
+  store_id VARCHAR(32) NOT NULL REFERENCES stores(id),
+  last_seen TIMESTAMPTZ NOT NULL,
+  ip_address INET,
+  firmware_version VARCHAR(32)
+);
+```
+
+### 23.2 Ingestion Path
+
+`Edge gateway → MQTT topic chromacommand/store/{id}/telemetry/sensors → API MQTT subscriber → batch INSERT into sensor_telemetry`. Aggregations are computed on read (not write) using SQL window functions; later we'll roll up to a `telemetry_5min` materialized view if read latency degrades.
+
+### 23.3 Retention
+
+- `sensor_telemetry`: 90 days raw, then aggregated to daily and the raw rows are dropped via a nightly job.
+- `device_heartbeats`: in place forever (single row per device, overwritten).
+- `activity_log`: 365 days then archived to R2 cold storage as JSONL.
+
+---
+
+## 24. Document Control (updated v1.2)
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| v1.0 | 2026-04-24 | Atlas (Hermes Agent) | Initial PRD |
+| v1.1 | 2026-04-25 | Atlas | Expandable RGB zones + Audio Module + One-Button Sync |
+| v1.2 | 2026-04-25 | Atlas | Observability (§20), MQTT QoS + idempotency (§21), Edge provisioning + mTLS (§22), Sensor telemetry table (§23) |

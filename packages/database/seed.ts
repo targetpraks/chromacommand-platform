@@ -132,9 +132,51 @@ async function seed() {
     });
   }
 
+  // ── Demo users (one per role) — dev-mode auth accepts any password ──
+  await db.insert(schema.users).values([
+    { firebaseUid: "dev-hq-admin", email: "ricardo@infxmedia.co.za", name: "Ricardo Maio", role: "hq_admin", orgId: org.id, scope: ["*"] },
+    { firebaseUid: "dev-cpt-rm", email: "regional.cpt@papapasta.co.za", name: "Cape Town RM", role: "regional_manager", orgId: org.id, scope: ["region:cape-town"] },
+    { firebaseUid: "dev-jhb-rm", email: "regional.jhb@papapasta.co.za", name: "Joburg RM", role: "regional_manager", orgId: org.id, scope: ["region:johannesburg"] },
+    { firebaseUid: "dev-pp-a01", email: "franchisee.a01@papapasta.co.za", name: "PP-A01 Franchisee", role: "franchisee", orgId: org.id, scope: ["store:pp-a01"] },
+    { firebaseUid: "dev-mtn", email: "marketing@mtn.co.za", name: "MTN Marketing", role: "sponsor_viewer", orgId: org.id, scope: ["*"] },
+    { firebaseUid: "dev-tech", email: "tech@infxmedia.co.za", name: "Field Tech", role: "technician", orgId: org.id, scope: ["*"] },
+  ]);
+
+  // ── Sensor telemetry: last 24h, 15-min cadence, per store/metric ──
+  const telemetryRows: any[] = [];
+  const now = Date.now();
+  for (const store of stores) {
+    for (let m = 0; m < 96; m++) {
+      const ts = new Date(now - (95 - m) * 15 * 60_000);
+      const hour = ts.getHours();
+      const peak = (hour >= 11 && hour <= 14) || (hour >= 18 && hour <= 21);
+      telemetryRows.push({ storeId: store.id, sensorId: "lidar-entry", metric: "footfall", value: Math.round((peak ? 25 : 6) + Math.random() * 8), recordedAt: ts });
+      telemetryRows.push({ storeId: store.id, sensorId: "fridge-1", metric: "temperature", value: 3.5 + Math.random() * 1.2, recordedAt: ts });
+      if (m % 4 === 0) {
+        telemetryRows.push({ storeId: store.id, sensorId: "screen-promo", metric: "impressions", value: Math.round(40 + Math.random() * 25), recordedAt: ts });
+        telemetryRows.push({ storeId: store.id, sensorId: "qr-table", metric: "qr_scan", value: Math.round(Math.random() * 5), recordedAt: ts });
+      }
+    }
+  }
+  for (let i = 0; i < telemetryRows.length; i += 200) {
+    await db.insert(schema.sensorTelemetry).values(telemetryRows.slice(i, i + 200));
+  }
+
+  // ── Gateway heartbeats — mark each store as recently seen ──
+  for (const store of stores) {
+    await db.insert(schema.deviceHeartbeats).values({
+      deviceId: `gateway-${store.id}`,
+      deviceType: "gateway",
+      storeId: store.id,
+      lastSeen: new Date(now - Math.random() * 60_000),
+      firmwareVersion: "1.2.0",
+    });
+  }
+
   console.log("✅ Seed complete:");
   console.log(`   ${stores.length} stores, ${zonesData.length} LED zones, ${screensData.length} screens, ${audioData.length} audio zones`);
   console.log(`   4 presets, 4 content assets, 1 playlist, 3 audio playlists, 50 activity log entries`);
+  console.log(`   6 users (one per role), ${telemetryRows.length} telemetry samples, ${stores.length} gateway heartbeats`);
 }
 
 seed().catch((err) => {

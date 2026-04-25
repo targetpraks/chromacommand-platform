@@ -1,4 +1,4 @@
-import { router, publicProcedure } from "../trpc";
+import { router, protectedProcedure as publicProcedure } from "../trpc";
 import { z } from "zod";
 import { db } from "@chromacommand/database";
 import { stores, ledZones, screens, audioZones } from "@chromacommand/database/schema";

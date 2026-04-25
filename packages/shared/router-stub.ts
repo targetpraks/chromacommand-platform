@@ -55,7 +55,20 @@ const sponsor = router({
   getTimeSeries: publicProcedure.input(z.any().optional()).query(() => []),
 });
 
+const auth = router({
+  login: publicProcedure.input(z.any()).mutation(() => ({ token: "", user: {} as any })),
+  me: publicProcedure.query(() => ({} as any)),
+});
+
+const telemetry = router({
+  getSeries: publicProcedure.input(z.any()).query(() => [] as any[]),
+  latest: publicProcedure.input(z.any()).query(() => [] as any[]),
+  liveDevices: publicProcedure.input(z.any()).query(() => [] as any[]),
+  ingest: publicProcedure.input(z.any()).mutation(() => ({ inserted: 0 })),
+});
+
 export const appRouter = router({
+  auth,
   stores,
   rgb,
   content,
@@ -63,6 +76,7 @@ export const appRouter = router({
   sync,
   analytics,
   sponsor,
+  telemetry,
   health,
 });
 
