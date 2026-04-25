@@ -434,3 +434,64 @@ This is sequential follow-on to Phase 6. Picks up the gaps that were called out 
 - `.env.example`
 
 > **Status: Phase 6.1 COMPLETE.** Auth, RBAC, rate-limiting, and transport security are now end-to-end tested. The platform is no longer trivially exploitable through the WebSocket or login endpoint.
+
+---
+
+## ✅ Phase 6.2: Edge bridge + refresh tokens + migrations + rollback UI
+
+Sequential follow-on. Closes the four "useful next" action points called out at the end of Phase 6.1.
+
+### 6.2A: Edge gateway aligned with v1.2 schema
+| Component | File | Change |
+|-----------|------|--------|
+| **mTLS support** | `apps/edge-gateway/gateway.js` | Loads device cert/key/CA from `MQTT_CLIENT_CERT/KEY/MQTT_CA_CERT` when broker URL is `mqtts://`. Matches PRD §22 |
+| **Heartbeat shape** | `apps/edge-gateway/gateway.js` | Now publishes `{device_id, device_type, store_id, ts, ip, version, uptime_s}` so the API's `device_heartbeats` upsert just works |
+| **Idempotent commands** | `apps/edge-gateway/gateway.js` | New `command_dedupe` SQLite table acts as a 1000-entry ring buffer per PRD §21.2 — duplicate `command_id` returns ack but doesn't re-apply |
+| **Sensor publisher** | `apps/edge-gateway/gateway.js` | New `sensor_buffer` SQLite table. Local devices `POST /api/v1/sensors/ingest` → buffered → flushed every 60s as `{samples: [...]}` to `chromacommand/store/{id}/telemetry/sensors` (qos=1) |
+| **Promise wrappers** | `apps/edge-gateway/gateway.js` | `dbRun/dbGet/dbAll` so handlers can `await` cleanly |
+
+### 6.2B: Refresh token rotation
+| Component | File | Details |
+|-----------|------|---------|
+| **Schema** | `packages/database/schema.ts` | `refresh_tokens` table: jti pk, user_id, issued/expires/revoked timestamps, replaced_by_jti, ip + UA |
+| **Token signing** | `apps/api/src/auth.ts` | New `signRefreshToken(userId, jti)` (typ=refresh) + `verifyRefreshToken()`. Access token now carries `typ=access` to prevent confusion |
+| **Default policy** | `apps/api/src/auth.ts` | **1h access / 30d refresh** — see Phase 6.2 commit message for the trade-off matrix; awaiting operator confirmation |
+| **`/auth/refresh`** | `apps/api/src/routers/auth.ts` | Single-use rotation: presents old refresh → issues new pair → marks old jti revoked + replaced_by |
+| **Reuse detection** | `apps/api/src/routers/auth.ts` | Presenting an already-revoked refresh = treats as theft, revokes ALL active tokens for that user (OWASP refresh-token rotation pattern) |
+| **`/auth/logout`** | `apps/api/src/routers/auth.ts` | Revokes a single refresh jti |
+| **`/auth/logoutAll`** | `apps/api/src/routers/auth.ts` | Revokes every active refresh token for the current user |
+
+### 6.2C: Drizzle migrations checked in
+| Component | File | Details |
+|-----------|------|---------|
+| **Baseline** | `packages/database/drizzle/0000_init.sql` | Hand-written equivalent of `drizzle-kit generate` for the entire v1.2 schema — fresh clone goes from zero to provisioned with `npm run db:migrate`, no `db:generate` step |
+| **Journal** | `packages/database/drizzle/meta/_journal.json` | Drizzle migration manifest |
+| **Idempotency** | All `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` so re-runs don't blow up |
+
+### 6.2D: One-Button Sync rollback UI
+| Component | File | Details |
+|-----------|------|---------|
+| **Transactions recorded** | `apps/api/src/routers/sync.ts` | Every `sync.transform` writes a `sync_transactions` row with `presetIdBefore` (from previous tx for same target) + `presetIdAfter` |
+| **`sync.recent`** | `apps/api/src/routers/sync.ts` | Returns the last N tx for a target (or globally) for the rollback UI |
+| **`sync.rollback`** | `apps/api/src/routers/sync.ts` | Resolves the prior preset, re-applies via the same MQTT path, records a new tx with `rolledBackFrom` annotation; refuses if there's no prior preset |
+| **`<RecentSyncs/>`** | `apps/dashboard/app/components/RecentSyncs.tsx` | Drop-in widget — list with per-row Rollback button, disabled when prior preset is missing or the row was itself a rollback |
+| **Sync page** | `apps/dashboard/app/sync/page.tsx` | Renders `<RecentSyncs />` below existing sync controls |
+
+### Files Added
+- `packages/database/drizzle/0000_init.sql`
+- `packages/database/drizzle/meta/_journal.json`
+- `apps/dashboard/app/components/RecentSyncs.tsx`
+
+### Files Modified
+- `apps/edge-gateway/gateway.js`
+- `apps/api/src/auth.ts`
+- `apps/api/src/routers/auth.ts`
+- `apps/api/src/routers/sync.ts`
+- `packages/database/schema.ts`
+- `packages/shared/router-stub.ts`
+- `apps/dashboard/app/sync/page.tsx`
+
+### Open Decision (waiting on Ricardo)
+**Refresh-token TTL policy** — currently set to 1h access + 30d refresh (option B from the matrix in chat). Will adjust if you pick A (15min/24h) or C (4h/90d).
+
+> **Status: Phase 6.2 COMPLETE.** Edge gateway now ingests cleanly into v1.2 schema; refresh-token rotation closes the "12h stolen-token window" gap; migrations are checked in so deploys are reproducible; operators can roll back any sync transform from the UI.

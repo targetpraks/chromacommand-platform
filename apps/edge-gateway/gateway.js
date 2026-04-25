@@ -72,7 +72,54 @@ db.serialize(() => {
       created_at INTEGER DEFAULT (strftime('%s', 'now'))
     )
   `);
+  // PRD §21.2: ring buffer of command_ids we've already executed.
+  // Duplicate command_id is acked but not re-applied.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS command_dedupe (
+      command_id TEXT PRIMARY KEY,
+      seen_at INTEGER DEFAULT (strftime('%s', 'now'))
+    )
+  `);
+  // Local sensor buffer — flushed every 60s as a batch upstream.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sensor_buffer (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sensor_id TEXT,
+      metric TEXT,
+      value REAL,
+      recorded_at INTEGER DEFAULT (strftime('%s', 'now')),
+      sent INTEGER DEFAULT 0
+    )
+  `);
 });
+
+// Async helpers wrapped in promises so handlers can await.
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) { err ? reject(err) : resolve(this); });
+  });
+}
+function dbGet(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
+  });
+}
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
+  });
+}
+
+async function isDuplicateCommand(commandId) {
+  if (!commandId) return false;
+  const row = await dbGet('SELECT 1 FROM command_dedupe WHERE command_id = ?', [commandId]);
+  if (row) return true;
+  await dbRun('INSERT OR IGNORE INTO command_dedupe (command_id) VALUES (?)', [commandId]);
+  // Trim ring buffer to last 1000 entries.
+  await dbRun(`DELETE FROM command_dedupe WHERE command_id NOT IN
+    (SELECT command_id FROM command_dedupe ORDER BY seen_at DESC LIMIT 1000)`);
+  return false;
+}
 
 // ─── MQTT Cloud Client ────────────────────────────────────────────────────
 const mqttOptions = {
@@ -81,9 +128,23 @@ const mqttOptions = {
   password: CONFIG.mqttPassword,
   reconnectPeriod: 5000,
   connectTimeout: 30000,
-  protocol: 'mqtts',
-  rejectUnauthorized: true,
+  rejectUnauthorized: process.env.MQTT_INSECURE !== '1',
 };
+
+// mTLS — load device cert/key/CA per PRD §22
+if (CONFIG.mqttBrokerUrl.startsWith('mqtts://')) {
+  const certPath = process.env.MQTT_CLIENT_CERT || '/etc/chromacommand/cert.pem';
+  const keyPath = process.env.MQTT_CLIENT_KEY || '/etc/chromacommand/key.pem';
+  const caPath = process.env.MQTT_CA_CERT || '/etc/chromacommand/ca.pem';
+  if (fs.existsSync(certPath)) mqttOptions.cert = fs.readFileSync(certPath);
+  if (fs.existsSync(keyPath)) mqttOptions.key = fs.readFileSync(keyPath);
+  if (fs.existsSync(caPath)) mqttOptions.ca = fs.readFileSync(caPath);
+  if (mqttOptions.cert && mqttOptions.key) {
+    console.log('🔐 mTLS enabled — using device cert');
+  } else {
+    console.warn('⚠️  mqtts:// configured but no device cert found — connection will likely fail');
+  }
+}
 
 const cloudClient = mqtt.connect(CONFIG.mqttBrokerUrl, mqttOptions);
 
@@ -180,15 +241,25 @@ async function handleCloudMessage(topic, messageStr) {
   try {
     const payload = JSON.parse(messageStr);
     const commandId = payload.command_id || `local_${Date.now()}`;
-    
+
     console.log(`📨 ${topic}:`, payload.command || payload.type || 'unknown');
-    
+
+    // PRD §21.2 idempotency — silently ack duplicates without re-applying.
+    if (await isDuplicateCommand(payload.command_id)) {
+      console.log(`   (duplicate command_id ${payload.command_id} — ack only)`);
+      cloudClient.publish(
+        `chromacommand/store/${CONFIG.storeId}/command/ack`,
+        JSON.stringify({ command_id: commandId, status: 'duplicate', timestamp: Date.now() })
+      );
+      return;
+    }
+
     // Log command
     db.run(
       'INSERT INTO command_log (command_id, type, payload, status) VALUES (?, ?, ?, ?)',
       [commandId, topic, messageStr, 'received']
     );
-    
+
     if (topic.includes('/rgb/set/')) {
       await handleRgbCommand(payload, commandId, topic);
     } else if (topic.includes('/content/')) {
@@ -375,30 +446,80 @@ function broadcastToLocalClients(message) {
 }
 
 // ─── Heartbeat ─────────────────────────────────────────────────────────────
+function localIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return null;
+}
+
+// Heartbeat — payload shape matches apps/api/src/mqtt.ts handleMessage()
+// which writes into device_heartbeats (device_id, device_type, store_id,
+// last_seen, ip_address, firmware_version).
 function startHeartbeat() {
   setInterval(() => {
-    const status = {
-      store_id: CONFIG.storeId,
-      timestamp: Date.now(),
-      uptime: process.uptime(),
-      version: '1.0.0',
-      devices: {
-        led_zones: 0, // TODO: count from DB
-        screens: 0,
-        audio_zones: 0,
-      }
-    };
-    
-    db.all('SELECT COUNT(*) as count FROM led_state', [], (err, rows) => {
-      if (!err) status.devices.led_zones = rows[0].count;
-      
-      cloudClient.publish(
-        `chromacommand/store/${CONFIG.storeId}/telemetry/heartbeat`,
-        JSON.stringify(status)
-      );
-    });
+    cloudClient.publish(
+      `chromacommand/store/${CONFIG.storeId}/telemetry/heartbeat`,
+      JSON.stringify({
+        device_id: `gateway-${CONFIG.storeId}`,
+        device_type: 'gateway',
+        store_id: CONFIG.storeId,
+        ts: Date.now(),
+        ip: localIp(),
+        version: '1.2.0',
+        uptime_s: Math.floor(process.uptime()),
+      }),
+      { qos: 0 }  // PRD §21.1: heartbeat is lossy-ok
+    );
   }, CONFIG.heartbeatInterval);
 }
+
+// Sensor publisher — batches buffered samples every 60s, payload shape
+// matches the API ingestor: { samples: [{ sensor_id, metric, value, recorded_at }] }
+async function publishSensorBatch() {
+  const rows = await dbAll(
+    'SELECT id, sensor_id, metric, value, recorded_at FROM sensor_buffer WHERE sent = 0 ORDER BY id LIMIT 500'
+  );
+  if (rows.length === 0) return;
+  const samples = rows.map((r) => ({
+    sensor_id: r.sensor_id,
+    metric: r.metric,
+    value: r.value,
+    recorded_at: new Date(r.recorded_at * 1000).toISOString(),
+  }));
+  cloudClient.publish(
+    `chromacommand/store/${CONFIG.storeId}/telemetry/sensors`,
+    JSON.stringify({ samples }),
+    { qos: 1 }  // PRD §21.1: sensor data must not be lost
+  );
+  const ids = rows.map((r) => r.id);
+  await dbRun(`UPDATE sensor_buffer SET sent = 1 WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+  // Trim once flushed for ~24h.
+  await dbRun(`DELETE FROM sensor_buffer WHERE sent = 1 AND recorded_at < ?`,
+    [Math.floor(Date.now() / 1000) - 86_400]);
+  console.log(`📤 Flushed ${samples.length} telemetry samples`);
+}
+
+setInterval(() => {
+  if (cloudClient.connected) publishSensorBatch().catch(err => console.error('sensor flush:', err.message));
+}, 60_000);
+
+// Public API: local devices POST sensor readings here, gateway batches.
+app.post('/api/v1/sensors/ingest', async (req, res) => {
+  const { sensor_id, metric, value, recorded_at } = req.body || {};
+  if (!sensor_id || !metric || typeof value !== 'number') {
+    return res.status(400).json({ error: 'sensor_id, metric, value required' });
+  }
+  const recAt = recorded_at ? Math.floor(new Date(recorded_at).getTime() / 1000) : Math.floor(Date.now() / 1000);
+  await dbRun(
+    'INSERT INTO sensor_buffer (sensor_id, metric, value, recorded_at) VALUES (?, ?, ?, ?)',
+    [sensor_id, metric, value, recAt]
+  );
+  res.json({ buffered: true });
+});
 
 // ─── Sync Scheduler (Periodically sync with cloud) ────────────────────────
 setInterval(() => {

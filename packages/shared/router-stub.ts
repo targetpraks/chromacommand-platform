@@ -34,6 +34,8 @@ const content = router({
 
 const sync = router({
   transform: publicProcedure.input(z.any()).mutation(() => ({ commandId: "", status: "dispatched", estimatedCompleteAt: "" })),
+  recent: publicProcedure.input(z.any()).query(() => [] as any[]),
+  rollback: publicProcedure.input(z.any()).mutation(() => ({ commandId: "", rolledBackFrom: "", affectedStores: 0 })),
 });
 
 const audio = router({
@@ -56,7 +58,10 @@ const sponsor = router({
 });
 
 const auth = router({
-  login: publicProcedure.input(z.any()).mutation(() => ({ token: "", user: {} as any })),
+  login: publicProcedure.input(z.any()).mutation(() => ({ token: "", refreshToken: "", user: {} as any })),
+  refresh: publicProcedure.input(z.any()).mutation(() => ({ token: "", refreshToken: "" })),
+  logout: publicProcedure.input(z.any()).mutation(() => ({ ok: true })),
+  logoutAll: publicProcedure.mutation(() => ({ ok: true })),
   me: publicProcedure.query(() => ({} as any)),
 });
 

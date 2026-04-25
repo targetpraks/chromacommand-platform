@@ -4,6 +4,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Zap, Check, Clock, AlertTriangle, Lightbulb, Monitor, Music, ArrowRight } from "lucide-react";
 import { trpc } from "../lib/trpc";
+import { RecentSyncs } from "../components/RecentSyncs";
 
 interface SyncPreset {
   id: string;
@@ -266,6 +267,10 @@ export default function SyncPage() {
           </div>
         </div>
       </motion.div>
+
+      <div className="mt-8">
+        <RecentSyncs />
+      </div>
     </div>
   );
 }

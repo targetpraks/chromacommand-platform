@@ -22,14 +22,36 @@ export interface AuthUser {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
-const JWT_TTL = process.env.JWT_TTL || "12h";
+const JWT_TTL = process.env.JWT_TTL || "1h";              // Short-lived access token
+const REFRESH_TTL_DAYS = Number(process.env.REFRESH_TTL_DAYS || 30); // Long-lived refresh token
+
+export const REFRESH_TTL_SECONDS = REFRESH_TTL_DAYS * 86_400;
 
 export function signToken(user: AuthUser): string {
   return jwt.sign(
-    { sub: user.id, email: user.email, role: user.role, orgId: user.orgId, scope: user.scope },
+    { sub: user.id, email: user.email, role: user.role, orgId: user.orgId, scope: user.scope, typ: "access" },
     JWT_SECRET,
     { expiresIn: JWT_TTL as any }
   );
+}
+
+/** Refresh tokens carry only the user id and a jti for revocation tracking. */
+export function signRefreshToken(userId: string, jti: string): string {
+  return jwt.sign(
+    { sub: userId, jti, typ: "refresh" },
+    JWT_SECRET,
+    { expiresIn: `${REFRESH_TTL_DAYS}d` as any }
+  );
+}
+
+export function verifyRefreshToken(token: string): { userId: string; jti: string } | null {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    if (payload.typ !== "refresh") return null;
+    return { userId: payload.sub, jti: payload.jti };
+  } catch {
+    return null;
+  }
 }
 
 export async function userFromRequest(req: FastifyRequest): Promise<AuthUser | null> {

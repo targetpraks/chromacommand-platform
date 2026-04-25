@@ -205,3 +205,21 @@ export const syncTransactions = pgTable("sync_transactions", {
   ackState: jsonb("ack_state").default("{}"),
   initiatedBy: uuid("initiated_by"),
 });
+
+/**
+ * Refresh tokens — server-side record so we can revoke without waiting for
+ * JWT expiry. Each row = one issued refresh token. Rotation: on /auth/refresh
+ * we mark the old row revoked and insert a new one (refresh-token rotation
+ * pattern — detects stolen tokens because the original presenter sees a 401
+ * the first time the thief uses it).
+ */
+export const refreshTokens = pgTable("refresh_tokens", {
+  jti: varchar("jti", { length: 64 }).primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  issuedAt: timestamp("issued_at", { withTimezone: true }).defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  replacedByJti: varchar("replaced_by_jti", { length: 64 }),
+  ipAddress: inet("ip_address"),
+  userAgent: text("user_agent"),
+});
