@@ -1,5 +1,5 @@
 import { TRPCProvider } from "./lib/trpc";
-import { Sidebar } from "./components/Sidebar";
+import { AppShell } from "./components/AppShell";
 import "./globals.css";
 import type { Metadata } from "next";
 
@@ -13,10 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="bg-[#0A0B14] text-white antialiased">
         <TRPCProvider>
-          <div className="flex">
-            <Sidebar />
-            <main className="flex-1 ml-[240px] min-h-screen">{children}</main>
-          </div>
+          <AppShell>{children}</AppShell>
         </TRPCProvider>
       </body>
     </html>

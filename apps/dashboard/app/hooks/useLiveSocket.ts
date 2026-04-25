@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
+import { getToken } from "../lib/trpc";
 
 type LiveMessage =
   | { type: "rgb_update"; storeId: string; scope: string; payload: { colour: string; mode: string; brightness: number; zoneId?: string } }
@@ -15,12 +16,15 @@ export function useLiveSocket(
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
   const connect = useCallback(() => {
-    const wsUrl =
-      typeof window !== "undefined"
-        ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/live/ws`
-        : "ws://localhost:4000/live/ws";
-
-    const ws = new WebSocket(wsUrl.replace(/:\d+/, ":4000"));
+    const token = getToken();
+    if (!token) {
+      // Defer connection until the user logs in. The MatrixView re-mounts on
+      // route changes which retriggers this hook.
+      return;
+    }
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    const wsBase = apiUrl.replace(/^http/, "ws");
+    const ws = new WebSocket(`${wsBase}/live/ws?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
 
     ws.onopen = () => {

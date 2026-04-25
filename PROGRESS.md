@@ -395,3 +395,42 @@ After pulling: run `cd packages/database && npm run db:generate && npm run db:mi
 - `PRD.md` (v1.2 — §20-§24)
 
 > **Status: Phase 6 COMPLETE.** Production-ready auth/RBAC, real MQTT command dispatch with reconnect + queue, sensor telemetry pipeline (MQTT-in → Postgres → tRPC out), Prometheus metrics, and PRD v1.2 covering everything that was implementation-defined.
+
+---
+
+## ✅ Phase 6.1: Auth-aware tests + WS auth + login rate-limit + mTLS support
+
+This is sequential follow-on to Phase 6. Picks up the gaps that were called out in the Phase 6 commit message.
+
+| Action point | File | Details |
+|--------------|------|---------|
+| **E2E tests log in first** | `apps/api/src/tests/e2e.test.ts` | `beforeAll` logs in two users (HQ + franchisee); existing tests now send `Authorization: Bearer <jwt>`; new test asserts unauth requests return 401 |
+| **RBAC negative tests** | `apps/api/src/tests/e2e.test.ts` | franchisee@pp-a01 → `sync.transform(pp-j01)` returns **403**; same call to `pp-a01` returns 200 |
+| **Telemetry + metrics tests** | `apps/api/src/tests/e2e.test.ts` | `telemetry.latest`, `analytics.getStats source label`, `/metrics` Prometheus exposition format |
+| **Login rate-limit** | `apps/api/src/rate-limit.ts` + `apps/api/src/routers/auth.ts` | In-process token bucket: 10 attempts / 60s per IP **and** per email; 11th request returns `TOO_MANY_REQUESTS` (HTTP 429); test asserts blocking |
+| **WebSocket auth** | `apps/api/src/live/index.ts` | `/live/ws?token=…` (or `Authorization` header for server-to-server); unauthorized connections receive `{type:"error",code:"unauthorized"}` then close with code 1008 |
+| **WS scope filtering** | `apps/api/src/live/index.ts` | `broadcast()` skips delivery to clients whose JWT scope doesn't cover the event's `storeId` (wildcard `*` and store-level scopes are honoured) |
+| **Dashboard WS sends token** | `apps/dashboard/app/hooks/useLiveSocket.ts` | Reads JWT from `localStorage` via `getToken()`, passes as `?token=…`; defers connection if no token (handles pre-login state) |
+| **Dashboard route guard** | `apps/dashboard/app/components/AuthGate.tsx` + `AppShell.tsx` | Client-side guard redirects unauthenticated visitors to `/login`; sidebar hidden on the login route |
+| **MQTT mTLS** | `apps/api/src/mqtt.ts` | When `MQTT_BROKER_URL` starts with `mqtts://`, loads X.509 client cert / key / CA from `MQTT_CLIENT_CERT` / `MQTT_CLIENT_KEY` / `MQTT_CA_CERT`; `MQTT_INSECURE=1` only for self-signed dev brokers |
+| **Env vars** | `.env.example` | `MQTT_CLIENT_CERT`, `MQTT_CLIENT_KEY`, `MQTT_CA_CERT`, `MQTT_INSECURE`, `MQTT_CLIENT_ID` |
+
+### Test Coverage Summary
+- **15 test cases** across 8 describe blocks (was 9 in Phase 5)
+- Covers: public routes, auth happy path, auth rejection, auth.me, RBAC scope (positive + negative), telemetry, login rate-limit, load test, WS unauth rejection, WS authed connect
+
+### Files Added
+- `apps/api/src/rate-limit.ts`
+- `apps/dashboard/app/components/AuthGate.tsx`
+- `apps/dashboard/app/components/AppShell.tsx`
+
+### Files Modified
+- `apps/api/src/tests/e2e.test.ts` (rewritten to use auth)
+- `apps/api/src/routers/auth.ts` (rate-limit applied)
+- `apps/api/src/live/index.ts` (token verification + scope filtering)
+- `apps/api/src/mqtt.ts` (mTLS cert loading)
+- `apps/dashboard/app/hooks/useLiveSocket.ts` (sends token)
+- `apps/dashboard/app/layout.tsx` (uses AppShell)
+- `.env.example`
+
+> **Status: Phase 6.1 COMPLETE.** Auth, RBAC, rate-limiting, and transport security are now end-to-end tested. The platform is no longer trivially exploitable through the WebSocket or login endpoint.

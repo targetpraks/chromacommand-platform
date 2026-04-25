@@ -1,4 +1,5 @@
 import mqtt, { MqttClient } from "mqtt";
+import { readFileSync, existsSync } from "node:fs";
 import { db } from "@chromacommand/database";
 import { sensorTelemetry, deviceHeartbeats } from "@chromacommand/database/schema";
 import { broadcast } from "./live";
@@ -14,13 +15,27 @@ export function initMqtt(): void {
 
   const url = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
   const opts: mqtt.IClientOptions = {
-    clientId: `cc-api-${Math.random().toString(16).slice(2, 10)}`,
+    clientId: process.env.MQTT_CLIENT_ID || `cc-api-${Math.random().toString(16).slice(2, 10)}`,
     clean: true,
     reconnectPeriod: 5000,
     connectTimeout: 10_000,
     username: process.env.MQTT_USERNAME,
     password: process.env.MQTT_PASSWORD,
   };
+
+  // mTLS — load X.509 cert + key + CA chain when broker URL is mqtts://
+  if (url.startsWith("mqtts://")) {
+    const certPath = process.env.MQTT_CLIENT_CERT;
+    const keyPath = process.env.MQTT_CLIENT_KEY;
+    const caPath = process.env.MQTT_CA_CERT;
+    if (certPath && existsSync(certPath)) opts.cert = readFileSync(certPath);
+    if (keyPath && existsSync(keyPath)) opts.key = readFileSync(keyPath);
+    if (caPath && existsSync(caPath)) opts.ca = readFileSync(caPath);
+    opts.rejectUnauthorized = process.env.MQTT_INSECURE === "1" ? false : true;
+    if (opts.cert && opts.key) {
+      console.log("[mqtt] mTLS enabled (cert + key loaded)");
+    }
+  }
 
   console.log(`[mqtt] connecting to ${url}…`);
   const c = mqtt.connect(url, opts);
