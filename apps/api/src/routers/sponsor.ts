@@ -2,7 +2,7 @@ import { router, requireRole } from "../trpc";
 const publicProcedure = requireRole("hq_admin", "sponsor_viewer", "regional_manager");
 import { z } from "zod";
 import { db } from "@chromacommand/database";
-import { stores, ledZones, screens, activityLog } from "@chromacommand/database/schema";
+import { stores, ledZones, screens, activityLog, sponsorActivations, sensorTelemetry } from "@chromacommand/database/schema";
 import { eq, desc, sql } from "drizzle-orm";
 
 export const sponsorRouter = router({
@@ -113,5 +113,110 @@ export const sponsorRouter = router({
         });
       }
       return series;
+    }),
+
+  /** List billable activations for a sponsor in a date range. */
+  listActivations: publicProcedure
+    .input(z.object({
+      sponsorName: z.string().optional(),
+      since: z.string().optional(),  // ISO
+      until: z.string().optional(),
+    }))
+    .query(async ({ input }) => {
+      const since = input.since ? new Date(input.since) : new Date(Date.now() - 30 * 86_400_000);
+      const until = input.until ? new Date(input.until) : new Date();
+
+      const rows = await db
+        .select()
+        .from(sponsorActivations)
+        .where(
+          input.sponsorName
+            ? sql`${sponsorActivations.sponsorName} = ${input.sponsorName}
+                  AND ${sponsorActivations.startedAt} >= ${since}
+                  AND ${sponsorActivations.startedAt} < ${until}`
+            : sql`${sponsorActivations.startedAt} >= ${since}
+                  AND ${sponsorActivations.startedAt} < ${until}`
+        )
+        .orderBy(desc(sponsorActivations.startedAt));
+
+      return rows.map((r) => {
+        const ended = r.endedAt ?? new Date();
+        const durationSec = Math.round((ended.getTime() - new Date(r.startedAt!).getTime()) / 1000);
+        return { ...r, durationSeconds: durationSec, ongoing: !r.endedAt };
+      });
+    }),
+
+  /**
+   * Generate an invoice line-item summary for a sponsor for a given period.
+   * Pulls impressions from sensor_telemetry across the time window of
+   * each activation × the rate.
+   */
+  invoice: publicProcedure
+    .input(z.object({
+      sponsorName: z.string(),
+      since: z.string(),
+      until: z.string(),
+    }))
+    .query(async ({ input }) => {
+      const since = new Date(input.since);
+      const until = new Date(input.until);
+
+      const acts = await db
+        .select()
+        .from(sponsorActivations)
+        .where(sql`${sponsorActivations.sponsorName} = ${input.sponsorName}
+                   AND ${sponsorActivations.startedAt} >= ${since}
+                   AND ${sponsorActivations.startedAt} < ${until}`)
+        .orderBy(desc(sponsorActivations.startedAt));
+
+      let totalImpressions = 0;
+      let totalCents = 0;
+      const lines: any[] = [];
+
+      for (const a of acts) {
+        const startedAt = new Date(a.startedAt!);
+        const endedAt = a.endedAt ?? until;
+        const rate = a.ratePerImpressionCents ?? 5;
+
+        // Sum impressions across affected stores during the activation window.
+        const targetClause = a.scope === "store"
+          ? sql`AND ${sensorTelemetry.storeId} = ${a.targetId}`
+          : sql``;
+        const result = await db.execute(sql`
+          SELECT COALESCE(SUM(value), 0)::float AS imp
+          FROM sensor_telemetry
+          WHERE metric = 'impressions'
+            AND recorded_at >= ${startedAt}
+            AND recorded_at < ${endedAt}
+            ${targetClause}
+        `);
+        const imp = Number((result.rows[0] as any)?.imp ?? 0);
+        const cents = Math.round(imp * rate);
+        totalImpressions += imp;
+        totalCents += cents;
+
+        lines.push({
+          activationId: a.id,
+          startedAt: a.startedAt,
+          endedAt: a.endedAt,
+          scope: a.scope,
+          targetId: a.targetId,
+          impressions: imp,
+          ratePerImpressionCents: rate,
+          subtotalCents: cents,
+        });
+      }
+
+      return {
+        sponsorName: input.sponsorName,
+        period: { since: input.since, until: input.until },
+        totals: {
+          activations: acts.length,
+          impressions: totalImpressions,
+          amountCents: totalCents,
+          amountZAR: (totalCents / 100).toFixed(2),
+        },
+        lines,
+      };
     }),
 });

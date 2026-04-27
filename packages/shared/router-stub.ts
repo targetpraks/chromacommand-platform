@@ -55,6 +55,8 @@ const analytics = router({
 const sponsor = router({
   getCampaignData: publicProcedure.input(z.any().optional()).query(() => ({} as any)),
   getTimeSeries: publicProcedure.input(z.any().optional()).query(() => []),
+  listActivations: publicProcedure.input(z.any()).query(() => [] as any[]),
+  invoice: publicProcedure.input(z.any()).query(() => ({} as any)),
 });
 
 const auth = router({
@@ -80,6 +82,24 @@ const schedules = router({
   activeJobs: publicProcedure.query(() => [] as any[]),
 });
 
+const firmware = router({
+  listReleases: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
+  createRelease: publicProcedure.input(z.any()).mutation(() => ({} as any)),
+  deploy: publicProcedure.input(z.any()).mutation(() => ({ deploymentId: "", commandId: "", totalDevices: 0 })),
+  reportResult: publicProcedure.input(z.any()).mutation(() => ({ successCount: 0, failureCount: 0, status: "pending" })),
+  listDeployments: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
+});
+
+const alerts = router({
+  listRules: publicProcedure.query(() => [] as any[]),
+  recentEvents: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
+  createRule: publicProcedure.input(z.any()).mutation(() => ({} as any)),
+  updateRule: publicProcedure.input(z.any()).mutation(() => ({} as any)),
+  deleteRule: publicProcedure.input(z.any()).mutation(() => ({ ok: true })),
+  evalNow: publicProcedure.mutation(() => ({ ok: true })),
+  summary: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
+});
+
 export const appRouter = router({
   auth,
   stores,
@@ -91,6 +111,8 @@ export const appRouter = router({
   sponsor,
   telemetry,
   schedules,
+  firmware,
+  alerts,
   health,
 });
 

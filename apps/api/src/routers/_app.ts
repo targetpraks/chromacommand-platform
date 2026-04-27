@@ -9,6 +9,8 @@ import { sponsorRouter } from "./sponsor";
 import { authRouter } from "./auth";
 import { telemetryRouter } from "./telemetry";
 import { schedulesRouter } from "./schedules";
+import { firmwareRouter } from "./firmware";
+import { alertsRouter } from "./alerts";
 
 export const appRouter = router({
   auth: authRouter,
@@ -21,6 +23,8 @@ export const appRouter = router({
   sponsor: sponsorRouter,
   telemetry: telemetryRouter,
   schedules: schedulesRouter,
+  firmware: firmwareRouter,
+  alerts: alertsRouter,
   health: router({
     ping: publicProcedure.query(() => ({ status: "ok", version: "1.2.0" })),
   }),

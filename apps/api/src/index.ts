@@ -8,6 +8,8 @@ import { registerLiveRoutes, broadcast } from "./live";
 import { initMqtt } from "./mqtt";
 import { registerMetrics } from "./metrics";
 import { startScheduler } from "./scheduler";
+import { startAlertsEngine } from "./alerts-engine";
+import { registerProvisioningRoutes } from "./provisioning";
 import dotenv from "dotenv";
 
 export { broadcast };
@@ -22,6 +24,7 @@ async function main() {
 
   registerLiveRoutes(fastify);
   registerMetrics(fastify);
+  registerProvisioningRoutes(fastify);
 
   await fastify.register(fastifyTRPCPlugin, {
     prefix: "/api/trpc",
@@ -42,6 +45,14 @@ async function main() {
       startScheduler();
     } catch (err) {
       fastify.log.warn({ err }, "[sched] startup failed");
+    }
+  }
+
+  if (process.env.DISABLE_ALERTS !== "1") {
+    try {
+      startAlertsEngine();
+    } catch (err) {
+      fastify.log.warn({ err }, "[alerts] startup failed");
     }
   }
 

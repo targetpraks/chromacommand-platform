@@ -226,3 +226,82 @@ CREATE TABLE IF NOT EXISTS "refresh_tokens" (
 );
 CREATE INDEX IF NOT EXISTS "idx_refresh_user_active"
   ON "refresh_tokens" ("user_id") WHERE "revoked_at" IS NULL;
+
+-- Phase 6.4: sponsor activation billing
+CREATE TABLE IF NOT EXISTS "sponsor_activations" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "sponsor_name" varchar(64) NOT NULL,
+  "preset_id" uuid REFERENCES "rgb_presets"("id"),
+  "scope" varchar(16) NOT NULL,
+  "target_id" varchar(32) NOT NULL,
+  "started_at" timestamptz NOT NULL DEFAULT NOW(),
+  "ended_at" timestamptz,
+  "duration_seconds" integer,
+  "affected_stores" integer DEFAULT 0,
+  "initiated_by" uuid REFERENCES "users"("id"),
+  "command_id" varchar(64),
+  "rate_per_impression_cents" integer DEFAULT 5
+);
+CREATE INDEX IF NOT EXISTS "idx_sponsor_act_name_started"
+  ON "sponsor_activations" ("sponsor_name", "started_at" DESC);
+
+-- Phase 6.4: OTA firmware
+CREATE TABLE IF NOT EXISTS "firmware_releases" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "device_class" varchar(32) NOT NULL,
+  "version" varchar(32) NOT NULL,
+  "url" text NOT NULL,
+  "sha256" varchar(64) NOT NULL,
+  "size_bytes" integer,
+  "notes" text,
+  "released_at" timestamptz DEFAULT NOW(),
+  "created_by" uuid REFERENCES "users"("id")
+);
+
+CREATE TABLE IF NOT EXISTS "firmware_deployments" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "release_id" uuid NOT NULL REFERENCES "firmware_releases"("id"),
+  "scope" varchar(16) NOT NULL,
+  "target_id" varchar(32) NOT NULL,
+  "started_at" timestamptz DEFAULT NOW(),
+  "completed_at" timestamptz,
+  "status" varchar(16) DEFAULT 'pending' NOT NULL,
+  "total_devices" integer DEFAULT 0,
+  "success_count" integer DEFAULT 0,
+  "failure_count" integer DEFAULT 0,
+  "initiated_by" uuid REFERENCES "users"("id")
+);
+
+-- Phase 6.4: alert engine
+CREATE TABLE IF NOT EXISTS "alert_rules" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "name" varchar(128) NOT NULL,
+  "description" text,
+  "metric" varchar(32) NOT NULL,
+  "comparator" varchar(8) NOT NULL,
+  "threshold" double precision NOT NULL,
+  "sustained_minutes" integer DEFAULT 0,
+  "scope" varchar(16) NOT NULL,
+  "target_id" varchar(32) NOT NULL,
+  "severity" varchar(16) DEFAULT 'warning',
+  "webhook_url" text,
+  "active" boolean DEFAULT true,
+  "cooldown_minutes" integer DEFAULT 15,
+  "created_at" timestamptz DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS "alert_events" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "rule_id" uuid REFERENCES "alert_rules"("id"),
+  "store_id" varchar(32) REFERENCES "stores"("id"),
+  "metric" varchar(32) NOT NULL,
+  "observed_value" double precision NOT NULL,
+  "threshold" double precision NOT NULL,
+  "severity" varchar(16) NOT NULL,
+  "message" text,
+  "fired_at" timestamptz DEFAULT NOW(),
+  "resolved_at" timestamptz,
+  "webhook_delivered" boolean DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS "idx_alert_events_fired_at"
+  ON "alert_events" ("fired_at" DESC);

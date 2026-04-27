@@ -1,7 +1,7 @@
 import { router, requireScope, protectedProcedure } from "../trpc";
 import { z } from "zod";
 import { db } from "@chromacommand/database";
-import { ledZones, rgbPresets, activityLog, stores, syncTransactions } from "@chromacommand/database/schema";
+import { ledZones, rgbPresets, activityLog, stores, syncTransactions, sponsorActivations } from "@chromacommand/database/schema";
 import { eq, desc } from "drizzle-orm";
 import { publishCommand } from "../mqtt";
 import { broadcast } from "../live";
@@ -113,6 +113,35 @@ export const syncRouter = router({
         .update(syncTransactions)
         .set({ completedAt: new Date() })
         .where(eq(syncTransactions.commandId, commandId));
+
+      // ── Sponsor billing hook ──────────────────────────────────────────
+      // If the new preset is a sponsor TakeOver, open a sponsor_activations
+      // row. Close any prior open activation on the same target (since
+      // changing presets ends the previous TakeOver's billable window).
+      const presetName = (preset?.name ?? "").toLowerCase();
+      const sponsorMatch = presetName.match(/\b(mtn|fnb|vodacom|telkom|absa|nedbank|standard bank|capitec|takealot|woolworths|sponsor)\b/);
+      if (sponsorMatch && preset) {
+        const sponsorName = sponsorMatch[1].toUpperCase();
+        // Close prior open activation on the same target.
+        await db
+          .update(sponsorActivations)
+          .set({
+            endedAt: new Date(),
+            durationSeconds: undefined, // computed below via SQL would be ideal; left null to compute lazily
+          })
+          .where(eq(sponsorActivations.targetId, input.targetId));
+        // Open the new one.
+        await db.insert(sponsorActivations).values({
+          sponsorName,
+          presetId: preset.id,
+          scope: input.scope,
+          targetId: input.targetId,
+          affectedStores: allStores.length,
+          initiatedBy: (ctx.user as any)?.id ?? null,
+          commandId,
+        });
+      }
+      // ── End sponsor billing hook ───────────────────────────────────────
 
       return {
         commandId,

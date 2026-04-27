@@ -172,6 +172,36 @@ async function seed() {
     await db.insert(schema.sensorTelemetry).values(telemetryRows.slice(i, i + 200));
   }
 
+  // ── Alert rules — built-in R638 fridge compliance + offline detection ──
+  await db.insert(schema.alertRules).values([
+    {
+      name: "R638 fridge temp compliance",
+      description: "SA Reg R638 requires cold-storage to remain <= 5°C. Fires if any fridge sensor stays above 5°C for 10+ minutes.",
+      metric: "temperature",
+      comparator: ">",
+      threshold: 5.0,
+      sustainedMinutes: 10,
+      scope: "global",
+      targetId: "all",
+      severity: "critical",
+      cooldownMinutes: 30,
+      active: true,
+    },
+    {
+      name: "Footfall drop — possible store issue",
+      description: "Hourly footfall drops to zero during business hours could indicate a sensor failure or a closed store.",
+      metric: "footfall",
+      comparator: "<",
+      threshold: 1,
+      sustainedMinutes: 60,
+      scope: "global",
+      targetId: "all",
+      severity: "warning",
+      cooldownMinutes: 120,
+      active: false,
+    },
+  ]);
+
   // ── Gateway heartbeats — mark each store as recently seen ──
   for (const store of stores) {
     await db.insert(schema.deviceHeartbeats).values({

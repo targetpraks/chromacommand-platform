@@ -223,3 +223,103 @@ export const refreshTokens = pgTable("refresh_tokens", {
   ipAddress: inet("ip_address"),
   userAgent: text("user_agent"),
 });
+
+/**
+ * Sponsor activations — billing record per TakeOver invocation.
+ * Created on every sync.transform that targets a sponsor preset.
+ * Closed when a subsequent sync.transform replaces it (endedAt set).
+ *
+ * Billing model: sponsors are billed on (impressions × duration_seconds).
+ * Impressions are joined from sensor_telemetry at invoice time.
+ */
+export const sponsorActivations = pgTable("sponsor_activations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sponsorName: varchar("sponsor_name", { length: 64 }).notNull(),
+  presetId: uuid("preset_id").references(() => rgbPresets.id),
+  scope: varchar("scope", { length: 16 }).notNull(),
+  targetId: varchar("target_id", { length: 32 }).notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  durationSeconds: integer("duration_seconds"),
+  affectedStores: integer("affected_stores").default(0),
+  initiatedBy: uuid("initiated_by").references(() => users.id),
+  commandId: varchar("command_id", { length: 64 }),
+  ratePerImpressionCents: integer("rate_per_impression_cents").default(5),  // 5c per impression default
+});
+
+/**
+ * Firmware releases — OTA payload registry. PRD §11.3 (LED) + §11.4 (screen).
+ * Each row = one firmware version available for a device class.
+ */
+export const firmwareReleases = pgTable("firmware_releases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deviceClass: varchar("device_class", { length: 32 }).notNull(),    // led_controller | screen_player | audio_player | gateway
+  version: varchar("version", { length: 32 }).notNull(),
+  url: text("url").notNull(),                                         // CDN URL (signed S3/R2)
+  sha256: varchar("sha256", { length: 64 }).notNull(),                // hex
+  sizeBytes: integer("size_bytes"),
+  notes: text("notes"),
+  releasedAt: timestamp("released_at", { withTimezone: true }).defaultNow(),
+  createdBy: uuid("created_by").references(() => users.id),
+});
+
+/**
+ * Firmware deployments — which release was pushed to which target.
+ * Tracks rollout status so we can compute the §15.3 A14 success-rate SLO.
+ */
+export const firmwareDeployments = pgTable("firmware_deployments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  releaseId: uuid("release_id").notNull().references(() => firmwareReleases.id),
+  scope: varchar("scope", { length: 16 }).notNull(),
+  targetId: varchar("target_id", { length: 32 }).notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  status: varchar("status", { length: 16 }).default("pending").notNull(),  // pending|success|failed|partial
+  totalDevices: integer("total_devices").default(0),
+  successCount: integer("success_count").default(0),
+  failureCount: integer("failure_count").default(0),
+  initiatedBy: uuid("initiated_by").references(() => users.id),
+});
+
+/**
+ * Alert rules — declarative threshold checks against sensor_telemetry.
+ * Eval'd by the alerts engine (apps/api/src/alerts.ts) every 60s.
+ *
+ * Example: R638 fridge compliance
+ *   metric=temperature, comparator=">", threshold=5.0, sustainedMinutes=10
+ *   → fires Slack alert if any fridge sensor stays above 5°C for >10 min.
+ */
+export const alertRules = pgTable("alert_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 128 }).notNull(),
+  description: text("description"),
+  metric: varchar("metric", { length: 32 }).notNull(),
+  comparator: varchar("comparator", { length: 8 }).notNull(),  // > | < | >= | <= | ==
+  threshold: doublePrecision("threshold").notNull(),
+  sustainedMinutes: integer("sustained_minutes").default(0),    // 0 = fire on first sample
+  scope: varchar("scope", { length: 16 }).notNull(),            // global | region | store
+  targetId: varchar("target_id", { length: 32 }).notNull(),
+  severity: varchar("severity", { length: 16 }).default("warning"),  // info|warning|critical
+  webhookUrl: text("webhook_url"),                               // Slack/Teams/Discord webhook
+  active: boolean("active").default(true),
+  cooldownMinutes: integer("cooldown_minutes").default(15),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+/**
+ * Alert events — one row per fired alert. We keep a history so dashboards
+ * can show "last 24h alerts" + investigate flapping rules.
+ */
+export const alertEvents = pgTable("alert_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ruleId: uuid("rule_id").references(() => alertRules.id),
+  storeId: varchar("store_id", { length: 32 }).references(() => stores.id),
+  metric: varchar("metric", { length: 32 }).notNull(),
+  observedValue: doublePrecision("observed_value").notNull(),
+  threshold: doublePrecision("threshold").notNull(),
+  severity: varchar("severity", { length: 16 }).notNull(),
+  message: text("message"),
+  firedAt: timestamp("fired_at", { withTimezone: true }).defaultNow(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  webhookDelivered: boolean("webhook_delivered").default(false),
+});

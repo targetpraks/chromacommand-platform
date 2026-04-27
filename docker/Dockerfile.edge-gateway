@@ -1,0 +1,47 @@
+# ChromaCommand Edge Gateway — runs on the per-store ThinkCentre Tiny
+# Build: docker build -f docker/Dockerfile.edge-gateway -t chromacommand/edge-gateway:1.2.0 .
+# Run:   docker run --network host \
+#          -v /etc/chromacommand:/etc/chromacommand:ro \
+#          -v cc-edge-data:/data \
+#          --env-file /etc/chromacommand/edge.env \
+#          chromacommand/edge-gateway:1.2.0
+#
+# `--network host` is required so the gateway can reach the local IoT
+# VLAN (LED controllers via ESP-NOW, screen players, audio nodes) and
+# accept UDP-multicast screen discovery.
+
+FROM node:20-bookworm-slim AS base
+
+# sqlite3 native deps; everything else is pure node.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        python3 \
+        make \
+        g++ \
+        libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY apps/edge-gateway/package.json ./package.json
+RUN npm install --omit=dev --build-from-source=sqlite3
+
+COPY apps/edge-gateway/gateway.js ./gateway.js
+
+# SQLite cache + cert volume.
+VOLUME ["/data", "/etc/chromacommand"]
+
+ENV DB_PATH=/data/edge_cache.db \
+    NODE_ENV=production
+
+# Local REST + WS port. MQTT is outbound-only.
+EXPOSE 5000
+
+# Drop privileges — node user is uid=1000 in the official image.
+USER node
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:5000/health || exit 1
+
+CMD ["node", "gateway.js"]

@@ -557,3 +557,77 @@ No drift fix required. The init.sql is faithful to v1.2 schema.
 - `packages/shared/router-stub.ts` (schedules type stubs)
 
 > **Status: Phase 6.3 COMPLETE.** TTL policy is final, migration is verified, every Phase-6.x endpoint has at least one E2E test, and the platform now satisfies PRD acceptance criterion A9 (scheduled execution). The full set of "obvious next things" from Phase 6 are done.
+
+---
+
+## ✅ Phase 6.4: Discovery + billing + Docker + OTA + alerts
+
+Sequential continuation. Closes the five "next useful" items from end-of-Phase-6.3.
+
+### 6.4A: Screen auto-discovery (PRD §6.7)
+| Component | File | Details |
+|-----------|------|---------|
+| **MQTT handler** | `apps/api/src/mqtt.ts` | `chromacommand/store/{id}/screens/discover` → upsert into `screens` table by MAC, derive stable id, register-ack back via `screens/register` |
+| **State broadcast** | `apps/api/src/mqtt.ts` | `screen_status` + `screen_discovered` WS events for live dashboard updates |
+
+### 6.4B: Sponsor billing
+| Component | File | Details |
+|-----------|------|---------|
+| **`sponsor_activations` table** | `packages/database/schema.ts` + migration | sponsor name, preset id, scope/target, started/ended/duration, affected stores, rate per impression cents |
+| **Auto-activation hook** | `apps/api/src/routers/sync.ts` | `sync.transform` detects sponsor presets via name regex (mtn/fnb/vodacom/...). Closes prior open activation, opens new one |
+| **`sponsor.listActivations`** | `apps/api/src/routers/sponsor.ts` | Date-range filtered list, computes durationSeconds + ongoing flag |
+| **`sponsor.invoice`** | `apps/api/src/routers/sponsor.ts` | Generates invoice line items: joins sensor_telemetry impressions × per-activation window × ratePerImpressionCents → totals in cents + ZAR |
+
+### 6.4C: Edge-gateway Docker + provisioning
+| Component | File | Details |
+|-----------|------|---------|
+| **Dockerfile** | `docker/Dockerfile.edge-gateway` | node:20-bookworm-slim, builds sqlite3 native, runs as `node` user uid 1000, healthcheck via local /health, volumes `/data` + `/etc/chromacommand` |
+| **provision.sh** | `apps/edge-gateway/provision.sh` | Cloud-init / curl-bash one-liner: gens Ed25519 keypair, claims with 8-char code, fetches per-device cert, writes /etc/chromacommand/edge.env, installs systemd unit, opens UFW for 5000/tcp + 5353/udp, sets up cron-based cert auto-renewal at -30d |
+| **Server-side `/provision/*`** | `apps/api/src/provisioning.ts` | `POST /provision/issue` (admin-keyed, mints 8-char code), `POST /provision/claim` (single-use code → cert + broker URL), `POST /provision/renew` (mTLS-authed, reissues cert) |
+
+### 6.4D: OTA firmware updates (PRD §11.3, §15.3 A14)
+| Component | File | Details |
+|-----------|------|---------|
+| **Schema** | `packages/database/schema.ts` + migration | `firmware_releases` (deviceClass, semver version, signed CDN URL, SHA-256, size, notes), `firmware_deployments` (release × scope × target with success/failure tally → status pending/success/failed/partial) |
+| **Firmware router** | `apps/api/src/routers/firmware.ts` | `listReleases`, `createRelease` (admin/tech only, validates semver + SHA-256 hex), `deploy` (scope-checked, fan-out MQTT publish to `firmware/install`), `reportResult`, `listDeployments` |
+| **Edge gateway** | `apps/edge-gateway/gateway.js` | Subscribes to `firmware/install`, fans out to local devices via WS as `firmware_install` event; collects `fw_ack` from devices and forwards each as `firmware/state` MQTT publish to cloud |
+| **API ack ingest** | `apps/api/src/mqtt.ts` | Subscribes to `firmware/state`, increments success/failure counters in `firmware_deployments`, broadcasts `firmware_state` WS event |
+
+### 6.4E: R638 compliance alerting + general alert engine
+| Component | File | Details |
+|-----------|------|---------|
+| **Schema** | `packages/database/schema.ts` + migration | `alert_rules` (metric, comparator, threshold, sustainedMinutes, scope, severity, webhookUrl, cooldownMinutes), `alert_events` (rule × store × observed value × fired/resolved timestamps) |
+| **Engine** | `apps/api/src/alerts-engine.ts` | 60s tick reads active rules, pulls last `sustainedMinutes` of telemetry, fires when **every** sample violates the comparator (with cooldown gating), auto-resolves when **none** violate, posts Slack-format JSON to webhookUrl |
+| **Alerts router** | `apps/api/src/routers/alerts.ts` | `listRules`, `createRule` (admin/RM), `updateRule`, `deleteRule` (admin), `evalNow` (force a tick — admin/tech), `summary` (severity counts last N hours), `recentEvents` |
+| **Boot wiring** | `apps/api/src/index.ts` | `startAlertsEngine()` non-fatal; `DISABLE_ALERTS=1` opts out |
+| **Default rule** | `packages/database/seed.ts` | Active critical rule: temperature > 5°C sustained 10m → R638 compliance breach. Plus inactive footfall-drop warning template |
+| **Alerts page** | `apps/dashboard/app/alerts/page.tsx` | Severity summary cards, create-rule form (metric/comparator/threshold/sustained/severity/cooldown/webhook), active rules with pause/delete, last-50 events feed, "Eval now" debug button |
+
+### Files Added (8)
+- `apps/api/src/provisioning.ts`
+- `apps/api/src/alerts-engine.ts`
+- `apps/api/src/routers/firmware.ts`
+- `apps/api/src/routers/alerts.ts`
+- `apps/dashboard/app/firmware/page.tsx`
+- `apps/dashboard/app/alerts/page.tsx`
+- `apps/edge-gateway/provision.sh`
+- `docker/Dockerfile.edge-gateway`
+
+### Files Modified
+- `apps/api/src/index.ts` (alerts engine + provisioning routes init)
+- `apps/api/src/mqtt.ts` (screen discovery + firmware ack handlers + new subscription)
+- `apps/api/src/routers/_app.ts` (mount firmware + alerts routers)
+- `apps/api/src/routers/sync.ts` (sponsor billing hook)
+- `apps/api/src/routers/sponsor.ts` (listActivations + invoice)
+- `apps/edge-gateway/gateway.js` (firmware install handler + fw_ack forwarding)
+- `apps/dashboard/app/components/Sidebar.tsx` (Firmware + Alerts nav)
+- `packages/database/schema.ts` (5 new tables)
+- `packages/database/drizzle/0000_init.sql` (5 new tables)
+- `packages/database/seed.ts` (R638 default rule + footfall template)
+- `packages/shared/router-stub.ts` (firmware + alerts type stubs)
+- `.env.example` (PROVISION_ADMIN_KEY, PROVISION_BROKER_URL, DISABLE_*)
+
+### Schema delta this phase
++5 tables: `sponsor_activations`, `firmware_releases`, `firmware_deployments`, `alert_rules`, `alert_events`. Total schema: **23 tables**.
+
+> **Status: Phase 6.4 COMPLETE.** Every "next useful" item from the end of Phase 6.3 shipped: screens self-register, sponsor TakeOvers auto-bill, the gateway is Docker-deployable with single-command provisioning, ESP32/Pi devices accept OTA firmware over MQTT with rollout tracking, and R638 fridge breaches trigger Slack webhooks within 60s of sustained violation.

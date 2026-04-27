@@ -165,6 +165,7 @@ cloudClient.on('connect', () => {
     `chromacommand/global/audio/set`,
     `chromacommand/region/${CONFIG.regionId}/rgb/set`,
     `chromacommand/region/${CONFIG.regionId}/content/set`,
+    `chromacommand/store/${CONFIG.storeId}/firmware/install`,
   ];
   
   cloudClient.subscribe(topics, (err) => {
@@ -268,6 +269,8 @@ async function handleCloudMessage(topic, messageStr) {
       await handleAudioCommand(payload, commandId);
     } else if (topic.includes('/sync/transform')) {
       await handleSyncTransform(payload, commandId);
+    } else if (topic.includes('/firmware/install')) {
+      await handleFirmwareInstall(payload, commandId);
     }
     
     // Update status
@@ -424,14 +427,51 @@ async function handleSyncTransform(payload, commandId) {
   console.log('✅ Sync transform complete');
 }
 
-// ─── Local Message Handler ─────────────────────────────────────────────────
+// ─── Firmware Install Handler ─────────────────────────────────────────────
+// Forwards the install command to local devices over WS.  Devices download
+// from `payload.url`, verify SHA-256, flash, then send {type:"fw_ack",
+// device_id, outcome, error?} back over WS.  We aggregate and publish
+// ack to the cloud.
+async function handleFirmwareInstall(payload, commandId) {
+  const deploymentId = payload.deployment_id;
+  console.log(`📦 Firmware install — class=${payload.device_class} v${payload.version} dep=${deploymentId}`);
+
+  // Fan out to every local device of the matching class.  ESP32 / Pi
+  // listens on the local WS for {type:"firmware_install"}.
+  broadcastToLocalClients({
+    type: 'firmware_install',
+    deployment_id: deploymentId,
+    device_class: payload.device_class,
+    version: payload.version,
+    url: payload.url,
+    sha256: payload.sha256,
+    size_bytes: payload.size_bytes,
+  });
+
+  // The local devices will report back via handleLocalMessage(); we forward
+  // each ack as its own MQTT publish so the cloud tally is real-time.
+}
+
 function handleLocalMessage(message) {
   // Handle messages from local devices (ESP32, screen players, audio nodes)
   if (message.type === 'heartbeat') {
-    // Device heartbeat — update status
     console.log(`💓 Heartbeat from ${message.device_type}: ${message.device_id}`);
   } else if (message.type === 'ack') {
     console.log(`✅ ACK from ${message.device_id}: ${message.status}`);
+  } else if (message.type === 'fw_ack') {
+    // Forward firmware install result to cloud.
+    cloudClient.publish(
+      `chromacommand/store/${CONFIG.storeId}/firmware/state`,
+      JSON.stringify({
+        deployment_id: message.deployment_id,
+        device_id: message.device_id,
+        outcome: message.outcome,
+        error: message.error || null,
+        ts: Date.now(),
+      }),
+      { qos: 1 }
+    );
+    console.log(`📦 Firmware ack ${message.device_id}: ${message.outcome}`);
   }
 }
 
