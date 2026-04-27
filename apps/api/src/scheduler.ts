@@ -1,7 +1,7 @@
 import cron, { ScheduledTask } from "node-cron";
 import { db } from "@chromacommand/database";
 import { rgbSchedules, rgbPresets, ledZones, stores, activityLog } from "@chromacommand/database/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { publishCommand } from "./mqtt";
 import { broadcast } from "./live";
 
@@ -174,6 +174,32 @@ export async function syncSchedules(): Promise<void> {
 
 let syncTimer: NodeJS.Timeout | null = null;
 
+/** Built-in nightly maintenance cron: refresh telemetry materialized views,
+ *  trim sensor_telemetry beyond 90 days. Runs at 03:15 SAST every day. */
+function startNightlyMaintenance(): void {
+  cron.schedule(
+    "15 3 * * *",
+    async () => {
+      try {
+        console.log("[sched] nightly maintenance — refreshing telemetry views");
+        await db.execute(sql`REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_hourly`).catch(() => {
+          // Fall back to non-concurrent if no unique index yet (first run).
+          return db.execute(sql`REFRESH MATERIALIZED VIEW telemetry_hourly`);
+        });
+        await db.execute(sql`REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_daily`).catch(() => {
+          return db.execute(sql`REFRESH MATERIALIZED VIEW telemetry_daily`);
+        });
+        // PRD §23.3 retention: drop raw rows older than 90 days.
+        await db.execute(sql`DELETE FROM sensor_telemetry WHERE recorded_at < NOW() - INTERVAL '90 days'`);
+        console.log("[sched] nightly maintenance done");
+      } catch (err) {
+        console.error("[sched] nightly maintenance failed:", err);
+      }
+    },
+    { timezone: "Africa/Johannesburg" }
+  );
+}
+
 export function startScheduler(): void {
   if (syncTimer) return;
   console.log("[sched] starting cron runner — re-syncs every 60s");
@@ -182,6 +208,7 @@ export function startScheduler(): void {
     void syncSchedules().catch((err) => console.error("[sched] sync failed:", err));
   }, 60_000);
   syncTimer.unref?.();
+  startNightlyMaintenance();
 }
 
 export function stopScheduler(): void {

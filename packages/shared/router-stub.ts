@@ -69,6 +69,7 @@ const auth = router({
 
 const telemetry = router({
   getSeries: publicProcedure.input(z.any()).query(() => [] as any[]),
+  hourlyAggregate: publicProcedure.input(z.any()).query(() => [] as any[]),
   latest: publicProcedure.input(z.any()).query(() => [] as any[]),
   liveDevices: publicProcedure.input(z.any()).query(() => [] as any[]),
   ingest: publicProcedure.input(z.any()).mutation(() => ({ inserted: 0 })),

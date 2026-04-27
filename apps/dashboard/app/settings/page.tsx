@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { User, Building2, Shield, Bell, Palette, Globe } from "lucide-react";
+import { LogoutButton } from "../components/LogoutButton";
 
 export default function SettingsPage() {
   return (
@@ -28,6 +29,10 @@ export default function SettingsPage() {
               <p className="text-[10px] text-text-secondary">HQ Admin · Infinity Brands</p>
               <p className="text-[10px] text-text-secondary">ricardo@infxmedia.xyz</p>
             </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            <LogoutButton />
+            <LogoutButton all />
           </div>
         </motion.div>
 

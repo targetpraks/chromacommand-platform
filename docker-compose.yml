@@ -56,9 +56,14 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:***@postgres:5432/chromacommand
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      JWT_TTL: ${JWT_TTL:-1h}
+      REFRESH_TTL_DAYS: ${REFRESH_TTL_DAYS:-30}
+      MQTT_BROKER_URL: mqtt://mqtt:1883
+      DASHBOARD_ORIGIN: http://localhost:3000
       NODE_ENV: development
     depends_on:
       - seed
+      - mqtt
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages
@@ -71,7 +76,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4000/api/trpc
+      NEXT_PUBLIC_API_URL: http://localhost:4000
       NODE_ENV: development
     depends_on:
       - api
@@ -80,7 +85,26 @@ services:
       - ./packages:/app/packages
     command: npm run dev --workspace=@chromacommand/dashboard
 
+  # Per-store edge gateway for local end-to-end testing.
+  # Comment out when iterating on cloud services only.
+  edge-gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.edge-gateway
+    network_mode: host
+    environment:
+      STORE_ID: pp-a01
+      REGION_ID: cape-town
+      MQTT_BROKER_URL: mqtt://localhost:1883
+      DB_PATH: /data/edge_cache.db
+      HEARTBEAT_INTERVAL: 30000
+    volumes:
+      - edge_data:/data
+    depends_on:
+      - mqtt
+
 volumes:
+  edge_data:
   postgres_data:
   redis_data:
   mqtt_data:

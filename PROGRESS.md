@@ -631,3 +631,55 @@ Sequential continuation. Closes the five "next useful" items from end-of-Phase-6
 +5 tables: `sponsor_activations`, `firmware_releases`, `firmware_deployments`, `alert_rules`, `alert_events`. Total schema: **23 tables**.
 
 > **Status: Phase 6.4 COMPLETE.** Every "next useful" item from the end of Phase 6.3 shipped: screens self-register, sponsor TakeOvers auto-bill, the gateway is Docker-deployable with single-command provisioning, ESP32/Pi devices accept OTA firmware over MQTT with rollout tracking, and R638 fridge breaches trigger Slack webhooks within 60s of sustained violation.
+
+---
+
+## ✅ Phase 6.5: Materialized views + nightly maintenance + UX polish
+
+Continued sequential work — operational polish on top of Phase 6.4.
+
+### 6.5A: Pre-aggregated telemetry views
+| Component | File | Details |
+|-----------|------|---------|
+| **`0001_telemetry_views.sql`** | `packages/database/drizzle/0001_telemetry_views.sql` | Two materialized views: `telemetry_hourly` (store × metric × hour bucket with count/avg/sum/min/max), `telemetry_daily` (same, daily). Unique indexes enable `REFRESH ... CONCURRENTLY` |
+| **Journal updated** | `packages/database/drizzle/meta/_journal.json` | Adds 0001 entry |
+| **`telemetry.hourlyAggregate`** | `apps/api/src/routers/telemetry.ts` | Reads from the materialized view; **falls back gracefully** to live aggregation if view doesn't exist yet (handles first-deploy ordering) |
+
+### 6.5B: Nightly maintenance cron
+| Component | File | Details |
+|-----------|------|---------|
+| **03:15 SAST nightly job** | `apps/api/src/scheduler.ts` | Refreshes both materialized views (CONCURRENTLY with non-concurrent fallback for first run), DELETEs `sensor_telemetry` rows older than 90 days per PRD §23.3 retention |
+| **Boot wiring** | `apps/api/src/scheduler.ts` | `startNightlyMaintenance()` registered alongside the schedule sync timer |
+
+### 6.5C: Logout UX
+| Component | File | Details |
+|-----------|------|---------|
+| **`<LogoutButton/>`** | `apps/dashboard/app/components/LogoutButton.tsx` | Two flavours — single-device sign-out (revokes presented refresh) and "sign out everywhere" (calls `auth.logoutAll`, revokes every active jti for the user). Both clear localStorage and redirect to `/login` |
+| **Settings page** | `apps/dashboard/app/settings/page.tsx` | Renders both buttons in the profile card |
+
+### 6.5D: Updated docker-compose for full local stack
+| Component | File | Details |
+|-----------|------|---------|
+| **API env** | `docker-compose.yml` | Wires `MQTT_BROKER_URL=mqtt://mqtt:1883`, `JWT_TTL=1h`, `REFRESH_TTL_DAYS=30`, `DASHBOARD_ORIGIN`, depends_on includes mqtt |
+| **Dashboard env** | `docker-compose.yml` | `NEXT_PUBLIC_API_URL=http://localhost:4000` (was `…/api/trpc` which was wrong) |
+| **edge-gateway service** | `docker-compose.yml` | New optional service (host-network mode) so the full edge ↔ cloud loop runs locally with one `docker compose up` |
+
+### 6.5E: README rewrite
+| Component | File | Details |
+|-----------|------|---------|
+| **README.md** | `README.md` | Replaced 1-line stub with full one-pager: architecture diagram, quickstart (Docker + manual), seeded users table, repo layout, real-store provisioning walkthrough, sponsor TakeOver example, R638 alert default, deployment targets, CI summary |
+
+### Files Added
+- `apps/dashboard/app/components/LogoutButton.tsx`
+- `packages/database/drizzle/0001_telemetry_views.sql`
+
+### Files Modified
+- `apps/api/src/scheduler.ts` (nightly maintenance)
+- `apps/api/src/routers/telemetry.ts` (hourlyAggregate)
+- `apps/dashboard/app/settings/page.tsx` (LogoutButton)
+- `packages/database/drizzle/meta/_journal.json`
+- `packages/shared/router-stub.ts`
+- `docker-compose.yml`
+- `README.md`
+
+> **Status: Phase 6.5 COMPLETE.** Telemetry queries are pre-aggregated for fast dashboards, nightly retention runs automatically, operators can sign out from any device or all devices, the README onboarding is no longer empty, and the full edge ↔ cloud stack runs locally with `docker compose up`.

@@ -57,6 +57,50 @@ export const telemetryRouter = router({
     }),
 
   /** Heartbeats — which devices are alive in the last N minutes. */
+  /**
+   * Hourly aggregate from telemetry_hourly materialized view.
+   * Falls back to live aggregation against sensor_telemetry if the view
+   * doesn't exist yet (first deploy before the 0001 migration ran).
+   */
+  hourlyAggregate: protectedProcedure
+    .input(z.object({
+      storeId: z.string(),
+      metric: z.string(),
+      sinceHours: z.number().int().min(1).max(168).default(24),
+    }))
+    .query(async ({ input }) => {
+      const since = new Date(Date.now() - input.sinceHours * 3600_000);
+      try {
+        const result = await db.execute(sql`
+          SELECT bucket, sample_count, avg_value, sum_value, min_value, max_value
+          FROM telemetry_hourly
+          WHERE store_id = ${input.storeId}
+            AND metric = ${input.metric}
+            AND bucket >= ${since}
+          ORDER BY bucket ASC
+        `);
+        return result.rows;
+      } catch {
+        // View doesn't exist yet — fall back to live aggregation.
+        const result = await db.execute(sql`
+          SELECT
+            date_trunc('hour', recorded_at) AS bucket,
+            COUNT(*)::int AS sample_count,
+            AVG(value)::float AS avg_value,
+            SUM(value)::float AS sum_value,
+            MIN(value)::float AS min_value,
+            MAX(value)::float AS max_value
+          FROM sensor_telemetry
+          WHERE store_id = ${input.storeId}
+            AND metric = ${input.metric}
+            AND recorded_at >= ${since}
+          GROUP BY date_trunc('hour', recorded_at)
+          ORDER BY bucket ASC
+        `);
+        return result.rows;
+      }
+    }),
+
   liveDevices: protectedProcedure
     .input(z.object({ withinMinutes: z.number().min(1).max(60).default(5) }))
     .query(async ({ input }) => {
