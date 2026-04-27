@@ -26,6 +26,20 @@ async function main() {
   registerMetrics(fastify);
   registerProvisioningRoutes(fastify);
 
+  // Liveness vs readiness — k8s style.
+  fastify.get("/healthz", async () => ({ status: "ok", uptime: process.uptime() }));
+  fastify.get("/readyz", async (_req, reply) => {
+    try {
+      const { db } = await import("@chromacommand/database");
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`SELECT 1`);
+      return { status: "ready", db: "ok" };
+    } catch (err) {
+      reply.code(503);
+      return { status: "not-ready", db: "down", error: (err as Error).message };
+    }
+  });
+
   await fastify.register(fastifyTRPCPlugin, {
     prefix: "/api/trpc",
     trpcOptions: { router: appRouter, createContext },
