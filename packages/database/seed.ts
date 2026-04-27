@@ -92,12 +92,22 @@ async function seed() {
   }
 
   // ── RGB Presets ──
-  await db.insert(schema.rgbPresets).values([
+  const insertedPresets = await db.insert(schema.rgbPresets).values([
     { name: "Navy & Gold Native", description: "Default Papa Pasta brand colours", colours: { all: "#1B2A4A" }, mode: "solid", brightness: 0.85, isGlobal: true },
     { name: "MTN Yellow", description: "MTN brand takeover — bright yellow", colours: { all: "#FFD100" }, mode: "solid", brightness: 0.9, isGlobal: true },
     { name: "FNB Gold", description: "FNB brand takeover — gold pulse", colours: { all: "#CBA135" }, mode: "pulse", brightness: 0.8, isGlobal: true },
     { name: "Late Night", description: "Dimmed warm glow for after-hours", colours: { all: "#FF6B35" }, mode: "breath", brightness: 0.3, isGlobal: true },
-  ]);
+  ]).returning();
+
+  // ── RGB Schedules — demo cron entries (paused by default so they don't fire mid-test) ──
+  const navyGold = insertedPresets.find((p) => p.name === "Navy & Gold Native");
+  const lateNight = insertedPresets.find((p) => p.name === "Late Night");
+  if (navyGold && lateNight) {
+    await db.insert(schema.rgbSchedules).values([
+      { name: "Morning Open — Navy & Gold", presetId: navyGold.id, scope: "global", targetId: "all", cronExpression: "0 6 * * 1-5", priority: 100, active: false },
+      { name: "Late Night Dim", presetId: lateNight.id, scope: "global", targetId: "all", cronExpression: "0 22 * * *", priority: 100, active: false },
+    ]);
+  }
 
   // ── Content Assets ──
   await db.insert(schema.contentAssets).values([

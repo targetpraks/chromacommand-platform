@@ -72,6 +72,14 @@ const telemetry = router({
   ingest: publicProcedure.input(z.any()).mutation(() => ({ inserted: 0 })),
 });
 
+const schedules = router({
+  list: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
+  create: publicProcedure.input(z.any()).mutation(() => ({} as any)),
+  update: publicProcedure.input(z.any()).mutation(() => ({} as any)),
+  remove: publicProcedure.input(z.any()).mutation(() => ({ ok: true })),
+  activeJobs: publicProcedure.query(() => [] as any[]),
+});
+
 export const appRouter = router({
   auth,
   stores,
@@ -82,6 +90,7 @@ export const appRouter = router({
   analytics,
   sponsor,
   telemetry,
+  schedules,
   health,
 });
 

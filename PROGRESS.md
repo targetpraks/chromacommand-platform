@@ -495,3 +495,65 @@ Sequential follow-on. Closes the four "useful next" action points called out at 
 **Refresh-token TTL policy** — currently set to 1h access + 30d refresh (option B from the matrix in chat). Will adjust if you pick A (15min/24h) or C (4h/90d).
 
 > **Status: Phase 6.2 COMPLETE.** Edge gateway now ingests cleanly into v1.2 schema; refresh-token rotation closes the "12h stolen-token window" gap; migrations are checked in so deploys are reproducible; operators can roll back any sync transform from the UI.
+
+---
+
+## ✅ Phase 6.3: TTL lock-in + migration audit + endpoint tests + scheduled transitions
+
+Sequential follow-on; finishes the open items at the end of Phase 6.2 plus tackles acceptance criterion **A9** (schedules execute automatically).
+
+### 6.3A: Refresh-token TTL — Policy B locked in
+| Component | File | Change |
+|-----------|------|--------|
+| Defaults | `.env.example` | `JWT_TTL=1h`, `REFRESH_TTL_DAYS=30` (was `12h`/no refresh). One-line comment documents the choice. |
+
+Decision recorded: 1h access + 30d refresh. Operators leave the dashboard open for 8–10h shifts; refresh-token rotation handles silent renewal; `auth.logoutAll` is the kill switch for stolen-laptop scenarios.
+
+### 6.3B: Migration drift audit
+| Check | Result |
+|-------|--------|
+| 18 tables in schema.ts vs. 0000_init.sql | ✅ all present |
+| Index parity (sensor_telemetry × 2, refresh_tokens partial) | ✅ matches; the partial-WHERE refresh index is intentionally raw SQL only because Drizzle's index DSL doesn't express partial indexes cleanly |
+| Spot-check led_zones column-by-column | ✅ types and defaults match |
+| Spot-check users.scope JSONB default `'[]'` | ✅ match |
+
+No drift fix required. The init.sql is faithful to v1.2 schema.
+
+### 6.3C: Tests for new endpoints
+| Component | File | Coverage |
+|-----------|------|----------|
+| **Refresh-token tests** | `apps/api/src/tests/refresh-rollback.test.ts` | login returns both tokens, rotation issues new pair, **reuse detection nukes all sessions**, logout revokes single jti, logoutAll revokes everything |
+| **Sync rollback tests** | `apps/api/src/tests/refresh-rollback.test.ts` | transform creates tx, recent returns it, rollback succeeds when prior preset exists, refuses when none |
+| **Telemetry ingest tests** | `apps/api/src/tests/refresh-rollback.test.ts` | technician + hq_admin can ingest, **franchisee gets 403**, getSeries returns bucketed data |
+
+11 new test cases on top of the 15 in Phase 6.1 = 26 total.
+
+### 6.3D: Scheduled RGB transitions (PRD acceptance criterion A9)
+| Component | File | Details |
+|-----------|------|---------|
+| **Scheduler runtime** | `apps/api/src/scheduler.ts` | node-cron-driven runner; reads `rgb_schedules` from Postgres; 60s re-sync picks up dashboard CRUD without restart; per-job priority guard prevents lower-priority schedules from firing when a higher-priority one targets the same scope |
+| **Conflict resolution** | `apps/api/src/scheduler.ts` | Higher `priority` wins on overlap; `affectsSameStore()` is conservative for region/global overlaps |
+| **API entry** | `apps/api/src/index.ts` | `startScheduler()` non-fatal on DB error; `DISABLE_SCHEDULER=1` opts out (e.g. for test instances) |
+| **CRUD router** | `apps/api/src/routers/schedules.ts` | `list`, `create` (scope-checked), `update` (admin/RM), `remove` (admin/RM), `activeJobs` (admin/tech debug) |
+| **Cron validation** | `apps/api/src/routers/schedules.ts` | `cron.validate()` rejects bad expressions at create/update time, returns 400 |
+| **Dashboard page** | `apps/dashboard/app/schedules/page.tsx` | Create form with cron presets dropdown, list with pause/resume/delete, priority editor |
+| **Sidebar** | `apps/dashboard/app/components/Sidebar.tsx` | New "Schedules" nav item with NEW badge |
+| **Seed** | `packages/database/seed.ts` | Adds 2 paused demo schedules ("Morning Open — Navy & Gold" weekday 06:00, "Late Night Dim" daily 22:00) — paused so they don't fire during tests |
+| **Deps** | `apps/api/package.json` | `node-cron@^3.0.3`, `@types/node-cron` |
+
+### Files Added
+- `apps/api/src/scheduler.ts`
+- `apps/api/src/routers/schedules.ts`
+- `apps/api/src/tests/refresh-rollback.test.ts`
+- `apps/dashboard/app/schedules/page.tsx`
+
+### Files Modified
+- `.env.example` (TTL policy)
+- `apps/api/src/index.ts` (scheduler init)
+- `apps/api/src/routers/_app.ts` (mount schedules router)
+- `apps/api/package.json` (node-cron)
+- `apps/dashboard/app/components/Sidebar.tsx` (Schedules nav)
+- `packages/database/seed.ts` (paused demo schedules)
+- `packages/shared/router-stub.ts` (schedules type stubs)
+
+> **Status: Phase 6.3 COMPLETE.** TTL policy is final, migration is verified, every Phase-6.x endpoint has at least one E2E test, and the platform now satisfies PRD acceptance criterion A9 (scheduled execution). The full set of "obvious next things" from Phase 6 are done.

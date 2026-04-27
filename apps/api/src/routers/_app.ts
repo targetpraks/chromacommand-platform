@@ -8,6 +8,7 @@ import { analyticsRouter } from "./analytics";
 import { sponsorRouter } from "./sponsor";
 import { authRouter } from "./auth";
 import { telemetryRouter } from "./telemetry";
+import { schedulesRouter } from "./schedules";
 
 export const appRouter = router({
   auth: authRouter,
@@ -19,6 +20,7 @@ export const appRouter = router({
   analytics: analyticsRouter,
   sponsor: sponsorRouter,
   telemetry: telemetryRouter,
+  schedules: schedulesRouter,
   health: router({
     ping: publicProcedure.query(() => ({ status: "ok", version: "1.2.0" })),
   }),

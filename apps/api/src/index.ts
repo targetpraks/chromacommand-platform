@@ -7,6 +7,7 @@ import { createContext } from "./trpc";
 import { registerLiveRoutes, broadcast } from "./live";
 import { initMqtt } from "./mqtt";
 import { registerMetrics } from "./metrics";
+import { startScheduler } from "./scheduler";
 import dotenv from "dotenv";
 
 export { broadcast };
@@ -32,6 +33,16 @@ async function main() {
     initMqtt();
   } catch (err) {
     fastify.log.warn({ err }, "[mqtt] init failed — commands will queue");
+  }
+
+  // Schedule runner — also non-fatal if DB is unreachable at startup;
+  // re-sync ticks will pick up once DB recovers.
+  if (process.env.DISABLE_SCHEDULER !== "1") {
+    try {
+      startScheduler();
+    } catch (err) {
+      fastify.log.warn({ err }, "[sched] startup failed");
+    }
   }
 
   await fastify.listen({ port: Number(process.env.PORT ?? 4000), host: "0.0.0.0" });
