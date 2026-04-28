@@ -31,7 +31,7 @@ export const sponsorRouter = router({
       let totalQRScans = 0;
       let activeStores = 0;
 
-      const storeStats = [];
+      const storeStats: any[] = [];
 
       for (const store of storeList) {
         const logCount = await db.select({ count: sql<number>`COUNT(*)` })
@@ -99,7 +99,7 @@ export const sponsorRouter = router({
     }))
     .query(async ({ input }) => {
       const days = input.period === "today" ? 1 : input.period === "week" ? 7 : 30;
-      const series = [];
+      const series: any[] = [];
       for (let i = days - 1; i >= 0; i--) {
         const date = new Date();
         date.setDate(date.getDate() - i);

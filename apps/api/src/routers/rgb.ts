@@ -24,7 +24,7 @@ const setInput = z.object({
 export const rgbRouter = router({
   listPresets: protectedProcedure.query(async () => {
     const rows = await db.select().from(rgbPresets);
-    return rows.map((r) => ({ id: r.id, ...r }));
+    return rows.map((r) => ({ ...r }));
   }),
 
   getState: protectedProcedure

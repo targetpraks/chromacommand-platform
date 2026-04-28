@@ -11,7 +11,7 @@ export const storesRouter = router({
       const rows = await db.select().from(stores)
         .where(input?.regionId ? eq(stores.regionId, input.regionId) : undefined);
 
-      const result = [];
+      const result: any[] = [];
       for (const store of rows) {
         const zoneRows = await db.select().from(ledZones).where(eq(ledZones.storeId, store.id));
         const screenRows = await db.select().from(screens).where(eq(screens.storeId, store.id));

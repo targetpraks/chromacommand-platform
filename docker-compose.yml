@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: chromacommand
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +38,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
     environment:
-      DATABASE_URL: postgresql://postgres:***@postgres:5432/chromacommand
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/chromacommand
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +54,7 @@ services:
     ports:
       - "4000:4000"
     environment:
-      DATABASE_URL: postgresql://postgres:***@postgres:5432/chromacommand
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/chromacommand
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       JWT_TTL: ${JWT_TTL:-1h}
       REFRESH_TTL_DAYS: ${REFRESH_TTL_DAYS:-30}

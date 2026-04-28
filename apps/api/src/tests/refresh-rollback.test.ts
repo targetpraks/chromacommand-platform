@@ -10,11 +10,11 @@ async function login(email: string, password = "dev") {
   const res = await fetch(`${baseURL}/api/trpc/auth.login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ json: { email, password } }),
+    body: JSON.stringify({ email, password }),
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  return body.result?.data?.json;
+  return body.result?.data;
 }
 
 function authed(token: string): RequestInit {
@@ -41,12 +41,12 @@ describe("Refresh token rotation", () => {
     const r1 = await fetch(`${baseURL}/api/trpc/auth.refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ json: { refreshToken: hqRefresh } }),
+      body: JSON.stringify({ refreshToken: hqRefresh }),
     });
     expect(r1.status).toBe(200);
     const b1 = await r1.json();
-    const newToken = b1.result?.data?.json?.token;
-    const newRefresh = b1.result?.data?.json?.refreshToken;
+    const newToken = b1.result?.data?.token;
+    const newRefresh = b1.result?.data?.refreshToken;
     expect(newToken).toBeTruthy();
     expect(newRefresh).toBeTruthy();
     expect(newRefresh).not.toBe(hqRefresh);
@@ -55,7 +55,7 @@ describe("Refresh token rotation", () => {
     const r2 = await fetch(`${baseURL}/api/trpc/auth.refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ json: { refreshToken: hqRefresh } }),
+      body: JSON.stringify({ refreshToken: hqRefresh }),
     });
     expect(r2.status).toBe(401);
 
@@ -64,7 +64,7 @@ describe("Refresh token rotation", () => {
     const r3 = await fetch(`${baseURL}/api/trpc/auth.refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ json: { refreshToken: newRefresh } }),
+      body: JSON.stringify({ refreshToken: newRefresh }),
     });
     expect(r3.status).toBe(401);
 
@@ -79,7 +79,7 @@ describe("Refresh token rotation", () => {
     const res = await fetch(`${baseURL}/api/trpc/auth.logout`, {
       method: "POST",
       ...authed(fresh.token),
-      body: JSON.stringify({ json: { refreshToken: fresh.refreshToken } }),
+      body: JSON.stringify({ refreshToken: fresh.refreshToken }),
     });
     expect(res.status).toBe(200);
 
@@ -87,7 +87,7 @@ describe("Refresh token rotation", () => {
     const r = await fetch(`${baseURL}/api/trpc/auth.refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ json: { refreshToken: fresh.refreshToken } }),
+      body: JSON.stringify({ refreshToken: fresh.refreshToken }),
     });
     expect(r.status).toBe(401);
   });
@@ -99,7 +99,7 @@ describe("Refresh token rotation", () => {
     const res = await fetch(`${baseURL}/api/trpc/auth.logoutAll`, {
       method: "POST",
       ...authed(a.token),
-      body: JSON.stringify({ json: {} }),
+      body: JSON.stringify({}),
     });
     expect(res.status).toBe(200);
 
@@ -108,7 +108,7 @@ describe("Refresh token rotation", () => {
       const r = await fetch(`${baseURL}/api/trpc/auth.refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ json: { refreshToken: tok } }),
+        body: JSON.stringify({ refreshToken: tok }),
       });
       expect(r.status).toBe(401);
     }
@@ -123,32 +123,30 @@ describe("Sync rollback", () => {
       method: "POST",
       ...authed(hqToken),
       body: JSON.stringify({
-        json: {
           scope: "store",
           targetId: "pp-a02",
           presetId: "00000000-0000-0000-0000-000000000000",
           effectiveAt: new Date().toISOString(),
           fadeDurationMs: 500,
           components: { rgb: true, content: true, audio: true },
-        },
-      }),
+        }),
     });
     expect(r.status).toBe(200);
     const body = await r.json();
-    firstCommandId = body.result?.data?.json?.commandId;
+    firstCommandId = body.result?.data?.commandId;
     expect(firstCommandId).toBeTruthy();
   });
 
   it("sync.recent returns the new transaction at the top", async () => {
     const r = await fetch(
       `${baseURL}/api/trpc/sync.recent?input=${encodeURIComponent(
-        JSON.stringify({ json: { targetId: "pp-a02", limit: 5 } })
+        JSON.stringify({ targetId: "pp-a02", limit: 5 })
       )}`,
       authed(hqToken)
     );
     expect(r.status).toBe(200);
     const body = await r.json();
-    const rows = body.result?.data?.json;
+    const rows = body.result?.data;
     expect(Array.isArray(rows)).toBe(true);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0].targetId).toBe("pp-a02");
@@ -162,18 +160,16 @@ describe("Sync rollback", () => {
       method: "POST",
       ...authed(hqToken),
       body: JSON.stringify({
-        json: {
           scope: "store",
           targetId: "pp-d01",
           presetId: "00000000-0000-0000-0000-000000000000",
           effectiveAt: new Date().toISOString(),
           fadeDurationMs: 500,
           components: { rgb: true, content: true, audio: true },
-        },
-      }),
+        }),
     });
     const fb = await fresh.json();
-    const cmdId = fb.result?.data?.json?.commandId;
+    const cmdId = fb.result?.data?.commandId;
 
     // Rollback the first-ever tx for this target → should fail
     // (only if pp-d01 had no prior history before this run; in a re-run
@@ -183,12 +179,12 @@ describe("Sync rollback", () => {
     const r = await fetch(`${baseURL}/api/trpc/sync.rollback`, {
       method: "POST",
       ...authed(hqToken),
-      body: JSON.stringify({ json: { commandId: cmdId } }),
+      body: JSON.stringify({ commandId: cmdId }),
     });
     if (r.status === 200) {
       // Prior tx existed — still valid, just check the response shape.
       const b = await r.json();
-      expect(b.result?.data?.json?.rolledBackFrom).toBe(cmdId);
+      expect(b.result?.data?.rolledBackFrom).toBe(cmdId);
     } else {
       expect([400, 500]).toContain(r.status);
     }
@@ -198,7 +194,7 @@ describe("Sync rollback", () => {
     // Push a different preset to pp-a02 so it has a meaningful "prior".
     // We need a real preset id — fetch one.
     const presetsRes = await fetch(`${baseURL}/api/trpc/rgb.listPresets`, authed(hqToken));
-    const presets = (await presetsRes.json()).result?.data?.json;
+    const presets = (await presetsRes.json()).result?.data;
     expect(presets.length).toBeGreaterThan(0);
     const realPreset = presets[0].id;
 
@@ -207,45 +203,41 @@ describe("Sync rollback", () => {
       method: "POST",
       ...authed(hqToken),
       body: JSON.stringify({
-        json: {
           scope: "store",
           targetId: "pp-a02",
           presetId: realPreset,
           effectiveAt: new Date().toISOString(),
           fadeDurationMs: 500,
           components: { rgb: true, content: true, audio: true },
-        },
-      }),
+        }),
     });
-    const c1 = (await t1.json()).result?.data?.json?.commandId;
+    const c1 = (await t1.json()).result?.data?.commandId;
 
     // Apply preset 2
     const t2 = await fetch(`${baseURL}/api/trpc/sync.transform`, {
       method: "POST",
       ...authed(hqToken),
       body: JSON.stringify({
-        json: {
           scope: "store",
           targetId: "pp-a02",
           presetId: presets[Math.min(1, presets.length - 1)].id,
           effectiveAt: new Date().toISOString(),
           fadeDurationMs: 500,
           components: { rgb: true, content: true, audio: true },
-        },
-      }),
+        }),
     });
-    const c2 = (await t2.json()).result?.data?.json?.commandId;
+    const c2 = (await t2.json()).result?.data?.commandId;
 
     // Rollback c2 — should succeed
     const r = await fetch(`${baseURL}/api/trpc/sync.rollback`, {
       method: "POST",
       ...authed(hqToken),
-      body: JSON.stringify({ json: { commandId: c2 } }),
+      body: JSON.stringify({ commandId: c2 }),
     });
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(body.result?.data?.json?.rolledBackFrom).toBe(c2);
-    expect(body.result?.data?.json?.commandId).toMatch(/^rollback_/);
+    expect(body.result?.data?.rolledBackFrom).toBe(c2);
+    expect(body.result?.data?.commandId).toMatch(/^rollback_/);
     expect(c1).toBeTruthy();
   });
 });
@@ -257,18 +249,16 @@ describe("Telemetry ingest", () => {
       method: "POST",
       ...authed(tech.token),
       body: JSON.stringify({
-        json: {
           storeId: "pp-a01",
           samples: [
             { sensorId: "test-lidar", metric: "footfall", value: 42 },
             { sensorId: "test-lidar", metric: "footfall", value: 51 },
           ],
-        },
-      }),
+        }),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.result?.data?.json?.inserted).toBe(2);
+    expect(body.result?.data?.inserted).toBe(2);
   });
 
   it("franchisee CANNOT call telemetry.ingest (technician/hq_admin only)", async () => {
@@ -277,11 +267,9 @@ describe("Telemetry ingest", () => {
       method: "POST",
       ...authed(f.token),
       body: JSON.stringify({
-        json: {
           storeId: "pp-a01",
           samples: [{ sensorId: "x", metric: "footfall", value: 1 }],
-        },
-      }),
+        }),
     });
     expect(res.status).toBe(403);
     expect(hqUserId).toBeTruthy();
@@ -290,14 +278,12 @@ describe("Telemetry ingest", () => {
   it("telemetry.getSeries returns bucketed footfall data", async () => {
     const r = await fetch(
       `${baseURL}/api/trpc/telemetry.getSeries?input=${encodeURIComponent(
-        JSON.stringify({
-          json: { storeId: "pp-a01", metric: "footfall", sinceMinutes: 1440, bucketMinutes: 60 },
-        })
+        JSON.stringify({ storeId: "pp-a01", metric: "footfall", sinceMinutes: 1440, bucketMinutes: 60 })
       )}`,
       authed(hqToken)
     );
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(Array.isArray(body.result?.data?.json)).toBe(true);
+    expect(Array.isArray(body.result?.data)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, jsonb, timestamp, float, boolean, inet, integer, bigserial, doublePrecision, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, jsonb, timestamp, doublePrecision, boolean, inet, integer, bigserial, index } from "drizzle-orm/pg-core";
 
 export const orgs = pgTable("orgs", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -23,8 +23,8 @@ export const stores = pgTable("stores", {
   name: varchar("name", { length: 128 }).notNull(),
   regionId: varchar("region_id", { length: 32 }).notNull(),
   address: text("address"),
-  lat: float("lat"),
-  lon: float("lon"),
+  lat: doublePrecision("lat"),
+  lon: doublePrecision("lon"),
   managerId: uuid("manager_id"),
   orgId: uuid("org_id"),
   status: varchar("status", { length: 16 }).default("setup").notNull(),
@@ -41,8 +41,8 @@ export const ledZones = pgTable("led_zones", {
   position: jsonb("position"),
   dimensions: jsonb("dimensions"),
   ledType: varchar("led_type", { length: 16 }).default("WS2812B"),
-  voltage: float("voltage").default(5),
-  maxBrightness: float("max_brightness").default(1.0),
+  voltage: doublePrecision("voltage").default(5),
+  maxBrightness: doublePrecision("max_brightness").default(1.0),
   currentColour: varchar("current_colour", { length: 7 }).default("#1B2A4A"),
   currentMode: varchar("current_mode", { length: 32 }).default("solid"),
   status: varchar("status", { length: 16 }).default("setup").notNull(),
@@ -69,7 +69,7 @@ export const audioZones = pgTable("audio_zones", {
   storeId: varchar("store_id", { length: 32 }).notNull().references(() => stores.id),
   zoneType: varchar("zone_type", { length: 32 }).notNull(),
   sinkName: varchar("sink_name", { length: 64 }),
-  volume: float("volume").default(0.5),
+  volume: doublePrecision("volume").default(0.5),
   status: varchar("status", { length: 16 }).default("offline").notNull(),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -81,8 +81,8 @@ export const rgbPresets = pgTable("rgb_presets", {
   description: text("description"),
   colours: jsonb("colours").notNull(),
   mode: varchar("mode", { length: 32 }).default("solid"),
-  brightness: float("brightness").default(1.0),
-  speed: float("speed").default(1.0),
+  brightness: doublePrecision("brightness").default(1.0),
+  speed: doublePrecision("speed").default(1.0),
   orgId: uuid("org_id").references(() => orgs.id),
   isGlobal: boolean("is_global").default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),

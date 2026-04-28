@@ -32,6 +32,22 @@ export function consume(key: string, opts: RateLimitOptions): RateLimitResult {
   };
 }
 
+/** Look up current count without incrementing. Used by auth.login so it can
+ *  reject early when the bucket is exhausted, without burning a token on
+ *  successful credentials. */
+export function peek(key: string, max: number): RateLimitResult {
+  const now = Date.now();
+  const bucket = buckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    return { allowed: true, remaining: max, resetIn: 0 };
+  }
+  return {
+    allowed: bucket.count < max,
+    remaining: Math.max(0, max - bucket.count),
+    resetIn: bucket.resetAt - now,
+  };
+}
+
 // Periodic cleanup so the map doesn't grow unbounded.
 setInterval(() => {
   const now = Date.now();

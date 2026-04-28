@@ -110,11 +110,12 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
 export function requireScope<TInput>(
   resolver: (input: TInput) => string[]
 ) {
-  return t.procedure.use(({ ctx, next, getRawInput }) => {
+  return t.procedure.use(async ({ ctx, next, getRawInput }) => {
     if (!ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED", message: "Authentication required" });
     }
-    const required = resolver((getRawInput() ?? {}) as TInput);
+    const rawInput = await getRawInput();
+    const required = resolver((rawInput ?? {}) as TInput);
     if (required.length === 0) {
       return next({ ctx: { ...ctx, user: ctx.user } });
     }

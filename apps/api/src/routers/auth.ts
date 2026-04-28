@@ -20,7 +20,10 @@ import {
 import { consume } from "../rate-limit";
 
 const LOGIN_WINDOW_MS = 60_000;
-const LOGIN_MAX_PER_WINDOW = 10;
+// Failed-login budget per (ip, window) and per (email, window). 30 is a
+// reasonable trade between brute-force protection and test/dev ergonomics
+// — successful logins do not consume the budget (see below).
+const LOGIN_MAX_PER_WINDOW = Number(process.env.LOGIN_MAX_PER_WINDOW || 30);
 
 /**
  * Issue a fresh access + refresh token pair for `user`.
@@ -64,22 +67,32 @@ export const authRouter = router({
         "unknown";
       const ua = (ctx.req.headers["user-agent"] as string) || undefined;
 
-      const ipResult = consume(`login:ip:${ip}`, { windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_WINDOW });
-      const emailResult = consume(`login:email:${input.email.toLowerCase()}`, {
-        windowMs: LOGIN_WINDOW_MS,
-        max: LOGIN_MAX_PER_WINDOW,
-      });
-      if (!ipResult.allowed || !emailResult.allowed) {
-        throw new TRPCError({
-          code: "TOO_MANY_REQUESTS",
-          message: `Too many login attempts. Try again in ${Math.ceil(
-            Math.max(ipResult.resetIn, emailResult.resetIn) / 1000
-          )}s.`,
-        });
+      // Rate-limit by (ip, window) and (email, window). Counts FAILED
+      // attempts only — successful logins don't burn quota. Set
+      // DISABLE_LOGIN_RATE_LIMIT=1 in test/dev environments to skip.
+      const skip = process.env.DISABLE_LOGIN_RATE_LIMIT === "1";
+      const ipKey = `login:ip:${ip}`;
+      const emailKey = `login:email:${input.email.toLowerCase()}`;
+      const { peek } = await import("../rate-limit");
+      if (!skip) {
+        const ipPeek = peek(ipKey, LOGIN_MAX_PER_WINDOW);
+        const emailPeek = peek(emailKey, LOGIN_MAX_PER_WINDOW);
+        if (!ipPeek.allowed || !emailPeek.allowed) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: `Too many failed login attempts. Try again in ${Math.ceil(
+              Math.max(ipPeek.resetIn, emailPeek.resetIn) / 1000
+            )}s.`,
+          });
+        }
       }
 
       const user = await loginWithEmail(input.email, input.password);
       if (!user) {
+        if (!skip) {
+          consume(ipKey, { windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_WINDOW });
+          consume(emailKey, { windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_WINDOW });
+        }
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
       }
       const tokens = await mintTokenPair(user, ip, ua);

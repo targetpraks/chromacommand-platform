@@ -32,7 +32,7 @@ async function main() {
     try {
       const { db } = await import("@chromacommand/database");
       const { sql } = await import("drizzle-orm");
-      await db.execute(sql`SELECT 1`);
+      await (db as any).execute(sql`SELECT 1`);
       return { status: "ready", db: "ok" };
     } catch (err) {
       reply.code(503);

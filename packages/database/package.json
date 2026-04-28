@@ -2,8 +2,12 @@
   "name": "@chromacommand/database",
   "version": "1.0.0",
   "private": true,
-  "main": "./schema.ts",
-  "types": "./schema.ts",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./schema": "./schema.ts"
+  },
   "scripts": {
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx migrate.ts",
