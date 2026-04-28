@@ -11,6 +11,7 @@ import { telemetryRouter } from "./telemetry";
 import { schedulesRouter } from "./schedules";
 import { firmwareRouter } from "./firmware";
 import { alertsRouter } from "./alerts";
+import { spotifyRouter } from "./spotify";
 
 export const appRouter = router({
   auth: authRouter,
@@ -25,6 +26,7 @@ export const appRouter = router({
   schedules: schedulesRouter,
   firmware: firmwareRouter,
   alerts: alertsRouter,
+  spotify: spotifyRouter,
   health: router({
     ping: publicProcedure.query(() => ({ status: "ok", version: "1.2.0" })),
   }),

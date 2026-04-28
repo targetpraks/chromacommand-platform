@@ -166,6 +166,8 @@ cloudClient.on('connect', () => {
     `chromacommand/region/${CONFIG.regionId}/rgb/set`,
     `chromacommand/region/${CONFIG.regionId}/content/set`,
     `chromacommand/store/${CONFIG.storeId}/firmware/install`,
+    `chromacommand/store/${CONFIG.storeId}/audio/spotify/play`,
+    `chromacommand/store/${CONFIG.storeId}/audio/spotify/pause`,
   ];
   
   cloudClient.subscribe(topics, (err) => {
@@ -271,6 +273,8 @@ async function handleCloudMessage(topic, messageStr) {
       await handleSyncTransform(payload, commandId);
     } else if (topic.includes('/firmware/install')) {
       await handleFirmwareInstall(payload, commandId);
+    } else if (topic.includes('/audio/spotify/')) {
+      await handleSpotifyCommand(topic, payload, commandId);
     }
     
     // Update status
@@ -425,6 +429,31 @@ async function handleSyncTransform(payload, commandId) {
   
   await Promise.all(promises);
   console.log('✅ Sync transform complete');
+}
+
+// ─── Spotify Command Handler ──────────────────────────────────────────────
+// Forwards play/pause to the local audio player WS so it can drive
+// librespot (or its embedded Spotify Connect client) directly.
+async function handleSpotifyCommand(topic, payload, commandId) {
+  const action = topic.endsWith('/play') ? 'play' : topic.endsWith('/pause') ? 'pause' : 'unknown';
+  console.log(`🎵 Spotify ${action}:`, payload.playlist_uri || '');
+
+  // Update local audio_state cache so a restart restores playback.
+  if (action === 'play' && payload.playlist_uri) {
+    db.run(
+      'INSERT OR REPLACE INTO audio_state (zone, playlist_id, volume, status) VALUES (?, ?, ?, ?)',
+      ['dining', payload.playlist_uri, 0.5, 'playing']
+    );
+  }
+
+  broadcastToLocalClients({
+    type: 'spotify',
+    action,
+    command_id: commandId,
+    playlist_uri: payload.playlist_uri,
+    position_ms: payload.position_ms || 0,
+    started_at: payload.started_at,
+  });
 }
 
 // ─── Firmware Install Handler ─────────────────────────────────────────────

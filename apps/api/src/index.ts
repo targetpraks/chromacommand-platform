@@ -10,6 +10,7 @@ import { registerMetrics } from "./metrics";
 import { startScheduler } from "./scheduler";
 import { startAlertsEngine } from "./alerts-engine";
 import { registerProvisioningRoutes } from "./provisioning";
+import { registerSpotifyRoutes } from "./spotify-routes";
 import dotenv from "dotenv";
 
 export { broadcast };
@@ -25,6 +26,7 @@ async function main() {
   registerLiveRoutes(fastify);
   registerMetrics(fastify);
   registerProvisioningRoutes(fastify);
+  registerSpotifyRoutes(fastify);
 
   // Liveness vs readiness — k8s style.
   fastify.get("/healthz", async () => ({ status: "ok", uptime: process.uptime() }));

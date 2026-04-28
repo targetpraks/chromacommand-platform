@@ -305,3 +305,31 @@ CREATE TABLE IF NOT EXISTS "alert_events" (
 );
 CREATE INDEX IF NOT EXISTS "idx_alert_events_fired_at"
   ON "alert_events" ("fired_at" DESC);
+
+-- Phase 6.8: Spotify integration
+CREATE TABLE IF NOT EXISTS "spotify_accounts" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "scope" varchar(16) NOT NULL DEFAULT 'global',
+  "target_id" varchar(32) NOT NULL DEFAULT 'all',
+  "spotify_user_id" varchar(128) NOT NULL,
+  "display_name" varchar(128),
+  "access_token" text NOT NULL,
+  "refresh_token" text NOT NULL,
+  "token_scope" text,
+  "expires_at" timestamptz NOT NULL,
+  "product_tier" varchar(16),
+  "active" boolean DEFAULT true,
+  "linked_by" uuid REFERENCES "users"("id"),
+  "created_at" timestamptz DEFAULT NOW(),
+  "updated_at" timestamptz DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS "idx_spotify_scope_target"
+  ON "spotify_accounts" ("scope", "target_id") WHERE "active" = true;
+
+CREATE TABLE IF NOT EXISTS "spotify_auth_states" (
+  "state" varchar(64) PRIMARY KEY,
+  "user_id" uuid REFERENCES "users"("id"),
+  "scope" varchar(16) NOT NULL DEFAULT 'global',
+  "target_id" varchar(32) NOT NULL DEFAULT 'all',
+  "expires_at" timestamptz NOT NULL
+);

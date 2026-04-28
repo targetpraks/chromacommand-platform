@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Grid, Monitor, Music, Settings, Zap, BarChart3, LayoutGrid, LogOut, HeartHandshake, Radio, Calendar, Cpu, Bell } from "lucide-react";
+import { Grid, Monitor, Music, Settings, Zap, BarChart3, LayoutGrid, LogOut, HeartHandshake, Radio, Calendar, Cpu, Bell, Music2 } from "lucide-react";
 import { motion } from "framer-motion";
 
 const navItems = [
@@ -11,6 +11,7 @@ const navItems = [
   { label: "Stores", icon: Grid, href: "/stores", badge: null },
   { label: "Content", icon: Monitor, href: "/content", badge: null },
   { label: "Audio", icon: Music, href: "/audio", badge: null },
+  { label: "Spotify", icon: Music2, href: "/spotify", badge: "NEW" },
   { label: "Sync", icon: Zap, href: "/sync", badge: null },
   { label: "Schedules", icon: Calendar, href: "/schedules", badge: null },
   { label: "Firmware", icon: Cpu, href: "/firmware", badge: "NEW" },

@@ -91,6 +91,19 @@ const firmware = router({
   listDeployments: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
 });
 
+const spotify = router({
+  listAccounts: publicProcedure.query(() => [] as any[]),
+  authorizeUrl: publicProcedure.input(z.any()).query(() => ({ url: "" })),
+  disconnect: publicProcedure.input(z.any()).mutation(() => ({ ok: true })),
+  listPlaylists: publicProcedure.input(z.any().optional()).query(() => ({ total: 0, items: [] as any[] })),
+  search: publicProcedure.input(z.any()).query(() => [] as any[]),
+  listDevices: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
+  nowPlaying: publicProcedure.input(z.any().optional()).query(() => null as any),
+  playToScope: publicProcedure.input(z.any()).mutation(() => ({ commandId: "", affectedStores: 0, directPlayback: { ok: false } })),
+  pause: publicProcedure.input(z.any()).mutation(() => ({ commandId: "", affectedStores: 0, directPlayback: { ok: false } })),
+  setVolume: publicProcedure.input(z.any()).mutation(() => ({ ok: true })),
+});
+
 const alerts = router({
   listRules: publicProcedure.query(() => [] as any[]),
   recentEvents: publicProcedure.input(z.any().optional()).query(() => [] as any[]),
@@ -114,6 +127,7 @@ export const appRouter = router({
   schedules,
   firmware,
   alerts,
+  spotify,
   health,
 });
 

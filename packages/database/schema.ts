@@ -323,3 +323,40 @@ export const alertEvents = pgTable("alert_events", {
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   webhookDelivered: boolean("webhook_delivered").default(false),
 });
+
+/**
+ * Spotify accounts — OAuth credentials for operator-controlled Spotify
+ * playback. A single account can be flagged as the platform default and
+ * used for all stores ("shared"), or per-store accounts can be linked
+ * for true independent multi-store playback.
+ *
+ * Refreshed automatically when access_token nears expiry.
+ */
+export const spotifyAccounts = pgTable("spotify_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  scope: varchar("scope", { length: 16 }).notNull().default("global"),    // global | region | store
+  targetId: varchar("target_id", { length: 32 }).notNull().default("all"),
+  spotifyUserId: varchar("spotify_user_id", { length: 128 }).notNull(),
+  displayName: varchar("display_name", { length: 128 }),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  tokenScope: text("token_scope"),                                          // OAuth scopes granted
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  productTier: varchar("product_tier", { length: 16 }),                     // free | premium
+  active: boolean("active").default(true),
+  linkedBy: uuid("linked_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+/**
+ * Spotify auth state — short-lived nonce used in the OAuth flow to
+ * correlate the redirect callback to the user who initiated it.
+ */
+export const spotifyAuthStates = pgTable("spotify_auth_states", {
+  state: varchar("state", { length: 64 }).primaryKey(),
+  userId: uuid("user_id").references(() => users.id),
+  scope: varchar("scope", { length: 16 }).notNull().default("global"),
+  targetId: varchar("target_id", { length: 32 }).notNull().default("all"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
