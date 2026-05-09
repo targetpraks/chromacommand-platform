@@ -46,8 +46,7 @@ status:
 	kubectl get pods -n $(NAMESPACE)
 	kubectl get svc -n $(NAMESPACE)
 	kubectl get ingress -n $(NAMESPACE)
-
-kubectl get pvc -n $(NAMESPACE)
+	kubectl get pvc -n $(NAMESPACE)
 
 clean:
 	kubectl delete namespace $(NAMESPACE) --ignore-not-found=true
