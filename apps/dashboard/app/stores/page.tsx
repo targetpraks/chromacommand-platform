@@ -60,7 +60,7 @@ export default function StoresPage() {
     <div className="min-h-screen px-6 py-6">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
         <h1 className="text-xl font-bold">Stores</h1>
-        <p className="text-xs text-text-secondary mt-1">{demoStores.length} stores in network</p>
+        <p className="text-xs text-on-dark-secondary mt-1">{demoStores.length} stores in network</p>
       </motion.div>
 
       <div className="mt-6 space-y-3">

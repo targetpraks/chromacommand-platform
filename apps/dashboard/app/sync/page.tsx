@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Zap, Check, Clock, AlertTriangle, Lightbulb, Monitor, Music, ArrowRight } from "lucide-react";
 import { trpc } from "../lib/trpc";
 import { RecentSyncs } from "../components/RecentSyncs";
+import { Button, Card, Badge, Spinner, StatusDot, Section } from "../components/ui";
 
 interface SyncPreset {
   id: string;
@@ -65,7 +66,7 @@ export default function SyncPage() {
   const [scope, setScope] = useState("global");
   const [executionResult, setExecutionResult] = useState<string | null>(null);
 
-  const { data: presets } = trpc.rgb.listPresets.useQuery();
+  const { data: presets } = trpc.rgb.listPresets.useQuery(undefined as any);
   const syncMutation = trpc.sync.transform.useMutation({
     onSuccess: (data) => {
       setExecutionResult(`✅ "${selectedPresetName}" activated across ${scope === "global" ? "all stores" : scope} · Command ${data.commandId}`);
@@ -79,12 +80,10 @@ export default function SyncPage() {
 
   const handleTransform = async (preset: SyncPreset) => {
     setExecutionResult(null);
-    // Map preset ID to DB preset id; in production this would be a proper mapping
     const dbPresetId = preset.id === "mtn_takeover" ? preset.id :
                         preset.id === "fnb_takeover" ? preset.id :
                         preset.id === "late_night" ? preset.id : "navy_gold";
 
-    // Determine actual scope/target
     let actualScope: "global" | "region" | "store" = "global";
     let targetId = "all";
     if (scope.startsWith("region-")) {
@@ -109,7 +108,7 @@ export default function SyncPage() {
     <div className="min-h-screen px-6 py-6">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-xl font-bold">One-Button Sync</h1>
-        <p className="text-xs text-text-secondary mt-1">Transform RGB + Content + Audio simultaneously</p>
+        <p className="text-xs text-on-dark-secondary mt-1">Transform RGB + Content + Audio simultaneously</p>
       </motion.div>
 
       {/* Scope selector */}
@@ -119,7 +118,7 @@ export default function SyncPage() {
         transition={{ delay: 0.1 }}
         className="mt-6 flex items-center gap-2"
       >
-        <span className="text-xs text-text-secondary">Scope:</span>
+        <span className="text-xs text-on-dark-secondary">Scope:</span>
         {[
           { id: "global", label: "All Stores" },
           { id: "region-cpt", label: "Cape Town Region" },
@@ -132,7 +131,7 @@ export default function SyncPage() {
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
               scope === s.id
                 ? "bg-gold text-navy"
-                : "bg-panel border border-border text-text-secondary hover:text-white hover:bg-panel-hover"
+                : "bg-panel border border-border text-on-dark-secondary hover:text-on-surface hover:bg-panel-hover"
             }`}
           >
             {s.label}
@@ -175,14 +174,14 @@ export default function SyncPage() {
                       {preset.sponsor !== "—" ? (
                         <span className="text-[10px] text-gold font-medium">{preset.sponsor} TakeOver</span>
                       ) : (
-                        <span className="text-[10px] text-text-secondary">Native Theme</span>
+                        <span className="text-[10px] text-on-dark-secondary">Native Theme</span>
                       )}
                     </div>
                   </div>
 
                   {isDone ? (
-                    <div className="w-8 h-8 rounded-full bg-green-500/15 flex items-center justify-center">
-                      <Check size={14} className="text-green-400" />
+                    <div className="w-8 h-8 rounded-full bg-success/15 flex items-center justify-center">
+                      <Check size={14} className="text-success" />
                     </div>
                   ) : isExecuting ? (
                     <div className="w-8 h-8 rounded-full bg-gold/15 flex items-center justify-center animate-pulse">
@@ -195,7 +194,7 @@ export default function SyncPage() {
                   ) : null}
                 </div>
 
-                <div className="mt-4 flex items-center gap-4 text-[10px] text-text-secondary">
+                <div className="mt-4 flex items-center gap-4 text-[10px] text-on-dark-secondary">
                   <span className="flex items-center gap-1">
                     <Lightbulb size={10} /> {preset.rgbMode}
                   </span>
@@ -215,17 +214,19 @@ export default function SyncPage() {
                   exit={{ opacity: 0, height: 0 }}
                   className="mt-2"
                 >
-                  <button
+                  <Button
+                    variant="primary"
+                    size="md"
+                    className="w-full"
                     onClick={() => handleTransform(preset)}
                     disabled={syncMutation.isPending}
-                    className="w-full py-3 bg-gold text-navy font-semibold text-sm rounded-lg hover:bg-gold/90 transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {syncMutation.isPending ? (
                       <>Transforming... <Clock size={14} className="animate-spin" /></>
                     ) : (
                       <><Zap size={14} strokeWidth={2.5} /> Activate {preset.name}</>
                     )}
-                  </button>
+                  </Button>
                 </motion.div>
               )}
             </motion.div>
@@ -238,7 +239,7 @@ export default function SyncPage() {
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mt-6 p-4 bg-green-500/5 border border-green-500/20 rounded-xl text-sm text-green-400 flex items-center gap-2"
+          className="mt-6 p-4 bg-success/5 border border-success/20 rounded-xl text-sm text-success flex items-center gap-2"
         >
           <Check size={16} /> {executionResult}
         </motion.div>
@@ -252,17 +253,17 @@ export default function SyncPage() {
         className="mt-8 p-4 bg-panel rounded-xl border border-border"
       >
         <h3 className="text-sm font-semibold mb-3">Live Status Preview</h3>
-        <div className="grid grid-cols-3 gap-4 text-[10px] text-text-secondary">
+        <div className="grid grid-cols-3 gap-4 text-[10px] text-on-dark-secondary">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500" />
+            <StatusDot status="online" />
             PP-A01: Navy & Gold — Online (2s)
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500" />
+            <StatusDot status="online" />
             PP-A02: MTN Yellow — Online (5s)
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-red-500" />
+            <StatusDot status="offline" />
             PP-J01: Disconnected (3h)
           </div>
         </div>

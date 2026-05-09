@@ -17,7 +17,7 @@ import {
   REFRESH_TTL_SECONDS,
   type AuthUser,
 } from "../auth";
-import { consume } from "../rate-limit.js";
+import { consume } from "../rate-limit";
 
 const LOGIN_WINDOW_MS = 60_000;
 // Failed-login budget per (ip, window) and per (email, window). 30 is a
@@ -73,7 +73,7 @@ export const authRouter = router({
       const skip = process.env.DISABLE_LOGIN_RATE_LIMIT === "1";
       const ipKey = `login:ip:${ip}`;
       const emailKey = `login:email:${input.email.toLowerCase()}`;
-      const { peek } = await import("../rate-limit.js");
+      const { peek } = await import("../rate-limit");
       if (!skip) {
         const ipPeek = peek(ipKey, LOGIN_MAX_PER_WINDOW);
         const emailPeek = peek(emailKey, LOGIN_MAX_PER_WINDOW);

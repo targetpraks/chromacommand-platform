@@ -7,8 +7,8 @@ import { StoreCard } from "./StoreCard";
 import { trpc } from "../lib/trpc";
 import { useLiveSocket } from "../hooks/useLiveSocket";
 import { useQueryClient } from "@tanstack/react-query";
+import { Button, Spinner, Badge } from "./ui";
 
-// Demo stores — fallback while loading
 const demoStores = [
   {
     id: "pp-a01",
@@ -67,15 +67,12 @@ export function MatrixView() {
 
   const { data: dbStores, isLoading, refetch } = trpc.stores.list.useQuery(undefined);
 
-  // Live WebSocket — refresh data on real-time events
   useLiveSocket((msg) => {
     if (msg.type === "rgb_update" || msg.type === "sync_complete" || msg.type === "audio_update" || msg.type === "store_status") {
       void queryClient.invalidateQueries({ queryKey: [["stores", "list"]] });
     }
   });
 
-  // If DB data exists, use it. Otherwise fall back to demo data.
-  // Map DB shape to UI shape (DB uses regionId, UI uses region; DB uses status "active"/"offline", UI uses "online"/"offline")
   const storeData = dbStores ?? demoStores;
 
   const filteredStores = filter === "all" ? storeData : storeData.filter((s: any) => s.region.toLowerCase().includes(filter.toLowerCase()));
@@ -85,7 +82,6 @@ export function MatrixView() {
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
       <motion.header
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -94,7 +90,7 @@ export function MatrixView() {
         <div className="flex items-center justify-between px-6 py-4">
           <div>
             <h1 className="text-xl font-bold">Network Matrix</h1>
-            <p className="text-xs text-text-secondary mt-0.5">
+            <p className="text-xs text-on-dark-secondary mt-0.5">
               {onlineCount} online · {offlineCount} offline · {storeData.length} total
             </p>
           </div>
@@ -102,27 +98,26 @@ export function MatrixView() {
             <select
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className="px-3 py-1.5 text-xs bg-panel border border-border rounded-lg hover:bg-panel-hover transition"
+              className="px-3 py-1.5 text-xs bg-panel border border-border-medium rounded-lg hover:bg-panel-hover transition cc-input"
             >
               <option value="all">All Regions</option>
               <option value="cape">Cape Town</option>
               <option value="johannesburg">Johannesburg</option>
               <option value="durban">Durban</option>
             </select>
-            <button
+            <Button
               onClick={() => { setIsRefreshing(true); refetch().finally(() => setIsRefreshing(false)); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-panel border border-border rounded-lg hover:bg-panel-hover transition"
+              className="flex items-center gap-1.5"
             >
               <RefreshCw size={12} className={isRefreshing ? "animate-spin" : ""} /> Refresh
-            </button>
-            <button className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-gold text-navy rounded-lg hover:bg-gold/90 transition">
+            </Button>
+            <Button variant="primary" size="md" className="flex items-center gap-1.5 text-xs font-semibold">
               <Zap size={12} strokeWidth={2.5} /> Sync All
-            </button>
+            </Button>
           </div>
         </div>
       </motion.header>
 
-      {/* Stats bar */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -131,22 +126,21 @@ export function MatrixView() {
       >
         {[
           { label: "RGB Zones Active", value: `${Math.round(filteredStores.reduce((acc: number, s: any) => acc + (s.zones?.length ?? 0), 0) * 0.95)}/${filteredStores.reduce((acc: number, s: any) => acc + (s.zones?.length ?? 0), 0)}`, colour: "bg-gold/10 text-gold" },
-          { label: "Screens Online", value: `${storeData.filter((s: any) => s.status === "online").reduce((acc: number, s: any) => acc + (s.screens ?? 0), 0)}`, colour: "bg-green-500/10 text-green-400" },
-          { label: "Audio Zones", value: `${storeData.filter((s: any) => s.status === "online").length * 2}`, colour: "bg-blue-500/10 text-blue-400" },
+          { label: "Screens Online", value: `${storeData.filter((s: any) => s.status === "online").reduce((acc: number, s: any) => acc + (s.screens ?? 0), 0)}`, colour: "bg-success-subtle text-success" },
+          { label: "Audio Zones", value: `${storeData.filter((s: any) => s.status === "online").length * 2}`, colour: "bg-info-subtle text-info" },
           { label: "Active TakeOver", value: "1", colour: "bg-purple-500/10 text-purple-400" },
         ].map((stat) => (
           <div key={stat.label} className={`${stat.colour} px-4 py-3 rounded-lg`}>
-            <p className="text-[10px] font-medium opacity-70">{stat.label}</p>
+            <p className="cc-badge font-medium opacity-70">{stat.label}</p>
             <p className="text-lg font-bold mt-0.5">{stat.value}</p>
           </div>
         ))}
       </motion.div>
 
-      {/* Store grid */}
       <div className="px-6 pb-8">
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
-            <div className="w-6 h-6 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+            <Spinner />
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">

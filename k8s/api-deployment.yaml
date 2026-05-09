@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: chromacommand
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: chromacommand-api:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 4000
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://postgres:postgres@postgres:5432/chromacommand"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: chromacommand-secrets
+                  key: jwt-secret
+            - name: JWT_TTL
+              value: "1h"
+            - name: REFRESH_TTL_DAYS
+              value: "30"
+            - name: MQTT_BROKER_URL
+              value: "mqtt://mqtt:1883"
+            - name: DASHBOARD_ORIGIN
+              value: "http://chromacommand.localhost"
+            - name: NODE_ENV
+              value: "production"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: chromacommand
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 4000
+      targetPort: 4000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: chromacommand
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.chromacommand.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 4000
