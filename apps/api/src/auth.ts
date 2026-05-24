@@ -21,7 +21,10 @@ export interface AuthUser {
   scope: string[]; // ["store:pp-a01", "region:cape-town", "org:infx", "*"]
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
 const JWT_TTL = process.env.JWT_TTL || "1h";              // Short-lived access token
 const REFRESH_TTL_DAYS = Number(process.env.REFRESH_TTL_DAYS || 30); // Long-lived refresh token
 
@@ -31,7 +34,7 @@ export function signToken(user: AuthUser): string {
   return jwt.sign(
     { sub: user.id, email: user.email, role: user.role, orgId: user.orgId, scope: user.scope, typ: "access" },
     JWT_SECRET,
-    { expiresIn: JWT_TTL as any }
+    { expiresIn: JWT_TTL }
   );
 }
 
@@ -40,7 +43,7 @@ export function signRefreshToken(userId: string, jti: string): string {
   return jwt.sign(
     { sub: userId, jti, typ: "refresh" },
     JWT_SECRET,
-    { expiresIn: `${REFRESH_TTL_DAYS}d` as any }
+    { expiresIn: `${REFRESH_TTL_DAYS}d` }
   );
 }
 
