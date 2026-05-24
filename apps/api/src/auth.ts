@@ -73,8 +73,9 @@ export async function userFromRequest(req: FastifyRequest): Promise<AuthUser | n
 }
 
 export async function loginWithEmail(email: string, _password: string): Promise<AuthUser | null> {
-  // Dev-mode auth: any password accepted for seeded users.
-  // Production: replace with Firebase Admin SDK token verification or argon2 password compare.
+  if (process.env.NODE_ENV !== "development") {
+    return null;
+  }
   const [row] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
   if (!row) return null;
   return {
