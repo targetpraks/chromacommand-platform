@@ -684,3 +684,17 @@ Continued sequential work — operational polish on top of Phase 6.4.
 
 > **Status: Phase 6.5 COMPLETE.** Telemetry queries are pre-aggregated for fast dashboards, nightly retention runs automatically, operators can sign out from any device or all devices, the README onboarding is no longer empty, and the full edge ↔ cloud stack runs locally with `docker compose up`.
 
+---
+
+## ✅ Sprint 3: OTA versioning UI, SECURITY.md, operational runbook, API docs
+
+| Item | Status | File | Details |
+|------|--------|------|---------|
+| **Enhanced OTA Firmware page** | ✅ Shipped | `apps/dashboard/app/firmware/page.tsx` | Added artifact version table (version, release date, device class, status badge, signing indicator), Rollback button stub (logs to console), expandable artifact detail rows, upload new firmware form stub |
+| **SECURITY.md** | ✅ Shipped | `SECURITY.md` | Documented 7 known security issues with remediation status (JWT rotation, AuthGate bypass removed, token storage moved to cookie, MQTT anonymous access, edge CA placeholder, Docker digest pinning, Helmet/CSP added). Contact: security@infinitybrands.co.za |
+| **Operational Runbook** | ✅ Shipped | `docs/OPERATIONAL_RUNBOOK.md` | Troubleshooting guides: MQTT broker connectivity, edge gateway offline detection, screen player rendering failures, audio player MPD issues. Escalation playbook (restart vs replace). Technician field guide for LED strip replacement and ESP32-S3 flashing. |
+| **API Documentation** | ✅ Shipped | `docs/API.md` | All 13 tRPC routers documented with endpoints, inputs, outputs, auth requirements per endpoint. Error code reference table. |
+| **PROGRESS.md update** | ✅ Shipped | `PROGRESS.md` | Sprint 3 section added |
+
+> **Sprint 3 complete. No blocked items.**
+
