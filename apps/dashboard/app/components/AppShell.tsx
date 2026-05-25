@@ -1,8 +1,16 @@
 "use client";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { AuthGate } from "./AuthGate";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isPublic = pathname === "/landing" || pathname.startsWith("/landing/");
+
+  if (isPublic) {
+    return <>{children}</>;
+  }
+
   return (
     <AuthGate>
       <div className="flex">
