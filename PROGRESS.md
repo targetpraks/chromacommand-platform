@@ -683,3 +683,4 @@ Continued sequential work — operational polish on top of Phase 6.4.
 - `README.md`
 
 > **Status: Phase 6.5 COMPLETE.** Telemetry queries are pre-aggregated for fast dashboards, nightly retention runs automatically, operators can sign out from any device or all devices, the README onboarding is no longer empty, and the full edge ↔ cloud stack runs locally with `docker compose up`.
+
