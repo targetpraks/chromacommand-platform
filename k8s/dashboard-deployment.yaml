@@ -4,7 +4,7 @@ metadata:
   name: dashboard
   namespace: chromacommand
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: dashboard
@@ -16,7 +16,7 @@ spec:
       containers:
         - name: dashboard
           image: chromacommand-dashboard:latest
-          imagePullPolicy: Never
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
           env:
@@ -24,6 +24,25 @@ spec:
               value: "http://api.chromacommand.localhost"
             - name: NODE_ENV
               value: "production"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service

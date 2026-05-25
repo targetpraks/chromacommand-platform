@@ -6,17 +6,25 @@ import type { AppRouter } from "@chromacommand/shared";
 
 export const trpc = createTRPCReact<AppRouter>();
 
-const TOKEN_KEY = "cc_jwt";
+const TOKEN_KEY = "cc_access_token";
+
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+  return match ? match[2] : null;
+}
 
 export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
+  return getCookie(TOKEN_KEY);
 }
 
 export function setToken(token: string | null): void {
-  if (typeof window === "undefined") return;
-  if (token) window.localStorage.setItem(TOKEN_KEY, token);
-  else window.localStorage.removeItem(TOKEN_KEY);
+  if (typeof document === "undefined") return;
+  if (token) {
+    document.cookie = `${TOKEN_KEY}=${token}; path=/; max-age=86400; SameSite=Strict`;
+  } else {
+    document.cookie = `${TOKEN_KEY}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  }
 }
 
 const getBaseUrl = () => {

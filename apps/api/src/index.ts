@@ -12,6 +12,7 @@ import { startAlertsEngine } from "./alerts-engine";
 import { registerProvisioningRoutes } from "./provisioning";
 import { registerSpotifyRoutes } from "./spotify-routes";
 import dotenv from "dotenv";
+import helmet from "@fastify/helmet";
 
 export { broadcast };
 
@@ -21,6 +22,22 @@ const fastify = Fastify({ logger: true });
 
 async function main() {
   await fastify.register(cors, { origin: process.env.DASHBOARD_ORIGIN?.split(",") ?? ["http://localhost:3000"] });
+  await fastify.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'", "ws:", "wss:"],
+        fontSrc: ["'self'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+      },
+    },
+    hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
+    frameguard: { action: "deny" },
   await fastify.register(websocket);
 
   registerLiveRoutes(fastify);
