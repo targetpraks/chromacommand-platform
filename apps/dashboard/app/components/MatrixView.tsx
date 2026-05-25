@@ -8,6 +8,8 @@ import { trpc } from "../lib/trpc";
 import { useLiveSocket } from "../hooks/useLiveSocket";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, Spinner, Badge } from "./ui";
+import { DemoModeBanner } from "./DemoModeBanner";
+import { OnboardingTour } from "./OnboardingTour";
 
 const demoStores = [
   {
@@ -117,6 +119,10 @@ export function MatrixView() {
           </div>
         </div>
       </motion.header>
+
+      {!isLoading && !dbStores && <DemoModeBanner />}
+
+      <OnboardingTour />
 
       <motion.div
         initial={{ opacity: 0 }}
