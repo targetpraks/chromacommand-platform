@@ -5,6 +5,8 @@ import { eq, and, sql } from "drizzle-orm";
 import { publishCommand } from "./mqtt";
 import { broadcast } from "./live";
 
+import { appLog } from "./logger";
+
 /**
  * Schedule runner — reads rgb_schedules from Postgres and registers a
  * node-cron job per active row. Re-syncs every 60 seconds so schedules
@@ -31,9 +33,10 @@ function jobKey(scheduleId: string): string {
 }
 
 async function applySchedule(s: typeof rgbSchedules.$inferSelect) {
+  const log = appLog();
   const [preset] = await db.select().from(rgbPresets).where(eq(rgbPresets.id, s.presetId!));
   if (!preset) {
-    console.warn(`[sched] schedule ${s.id} → preset ${s.presetId} missing; skipping`);
+    log.warn(`[sched] schedule ${s.id} → preset ${s.presetId} missing; skipping`);
     return;
   }
 
@@ -54,7 +57,7 @@ async function applySchedule(s: typeof rgbSchedules.$inferSelect) {
       affectsSameStore(j.scope, j.targetId, s.scope, s.targetId)
   );
   if (sameMinuteHigher) {
-    console.log(`[sched] skipping ${s.id} (${s.name}) — higher-priority schedule is active`);
+    log.info(`[sched] skipping ${s.id} (${s.name}) — higher-priority schedule is active`);
     return;
   }
 
@@ -104,7 +107,7 @@ async function applySchedule(s: typeof rgbSchedules.$inferSelect) {
     },
   });
 
-  console.log(`[sched] fired ${s.name} (${s.id}) → ${affected.length} store(s) at ${new Date().toISOString()}`);
+  log.info(`[sched] fired ${s.name} (${s.id}) → ${affected.length} store(s) at ${new Date().toISOString()}`);
 }
 
 function affectsSameStore(
@@ -122,6 +125,7 @@ function affectsSameStore(
 }
 
 export async function syncSchedules(): Promise<void> {
+  const log = appLog();
   const rows = await db
     .select()
     .from(rgbSchedules)
@@ -139,14 +143,14 @@ export async function syncSchedules(): Promise<void> {
     }
 
     if (!cron.validate(s.cronExpression)) {
-      console.warn(`[sched] invalid cron "${s.cronExpression}" on schedule ${s.id} — skipped`);
+      log.warn(`[sched] invalid cron "${s.cronExpression}" on schedule ${s.id} — skipped`);
       continue;
     }
 
     const task = cron.schedule(
       s.cronExpression,
       () => {
-        applySchedule(s).catch((err) => console.error(`[sched] ${s.id} failed:`, err));
+        applySchedule(s).catch((err) => log.error({ err }, `[sched] ${s.id} failed`));
       },
       { timezone: s.timezone || "Africa/Johannesburg" }
     );
@@ -159,7 +163,7 @@ export async function syncSchedules(): Promise<void> {
       scope: s.scope,
       targetId: s.targetId,
     });
-    console.log(`[sched] registered "${s.name}" (${s.cronExpression}, priority=${s.priority})`);
+    log.info(`[sched] registered "${s.name}" (${s.cronExpression}, priority=${s.priority})`);
   }
 
   // Tear down jobs whose row was deleted/deactivated.
@@ -167,7 +171,7 @@ export async function syncSchedules(): Promise<void> {
     if (!seen.has(key)) {
       job.task.stop();
       jobs.delete(key);
-      console.log(`[sched] deregistered ${job.scheduleId}`);
+      log.info(`[sched] deregistered ${job.scheduleId}`);
     }
   }
 }
@@ -177,11 +181,12 @@ let syncTimer: NodeJS.Timeout | null = null;
 /** Built-in nightly maintenance cron: refresh telemetry materialized views,
  *  trim sensor_telemetry beyond 90 days. Runs at 03:15 SAST every day. */
 function startNightlyMaintenance(): void {
+  const log = appLog();
   cron.schedule(
     "15 3 * * *",
     async () => {
       try {
-        console.log("[sched] nightly maintenance — refreshing telemetry views");
+        log.info("[sched] nightly maintenance — refreshing telemetry views");
         await db.execute(sql`REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_hourly`).catch(() => {
           // Fall back to non-concurrent if no unique index yet (first run).
           return db.execute(sql`REFRESH MATERIALIZED VIEW telemetry_hourly`);
@@ -191,9 +196,9 @@ function startNightlyMaintenance(): void {
         });
         // PRD §23.3 retention: drop raw rows older than 90 days.
         await db.execute(sql`DELETE FROM sensor_telemetry WHERE recorded_at < NOW() - INTERVAL '90 days'`);
-        console.log("[sched] nightly maintenance done");
+        log.info("[sched] nightly maintenance done");
       } catch (err) {
-        console.error("[sched] nightly maintenance failed:", err);
+        log.error({ err }, "[sched] nightly maintenance failed");
       }
     },
     { timezone: "Africa/Johannesburg" }
@@ -201,11 +206,12 @@ function startNightlyMaintenance(): void {
 }
 
 export function startScheduler(): void {
+  const log = appLog();
   if (syncTimer) return;
-  console.log("[sched] starting cron runner — re-syncs every 60s");
-  void syncSchedules().catch((err) => console.error("[sched] initial sync failed:", err));
+  log.info("[sched] starting cron runner — re-syncs every 60s");
+  void syncSchedules().catch((err) => log.error({ err }, "[sched] initial sync failed"));
   syncTimer = setInterval(() => {
-    void syncSchedules().catch((err) => console.error("[sched] sync failed:", err));
+    void syncSchedules().catch((err) => log.error({ err }, "[sched] sync failed"));
   }, 60_000);
   syncTimer.unref?.();
   startNightlyMaintenance();

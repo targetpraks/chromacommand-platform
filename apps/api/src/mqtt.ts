@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { broadcast } from "./live";
 import { bumpCounter } from "./metrics";
 
+import { appLog } from "./logger";
+
 let client: MqttClient | null = null;
 let connectAttempted = false;
 const pendingQueue: Array<{ topic: string; payload: unknown; qos: 0 | 1 | 2 }> = [];
@@ -14,6 +16,7 @@ export function initMqtt(): void {
   if (connectAttempted) return;
   connectAttempted = true;
 
+  const log = appLog();
   const url = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
   const opts: mqtt.IClientOptions = {
     clientId: process.env.MQTT_CLIENT_ID || `cc-api-${Math.random().toString(16).slice(2, 10)}`,
@@ -34,16 +37,16 @@ export function initMqtt(): void {
     if (caPath && existsSync(caPath)) opts.ca = readFileSync(caPath);
     opts.rejectUnauthorized = process.env.MQTT_INSECURE === "1" ? false : true;
     if (opts.cert && opts.key) {
-      console.log("[mqtt] mTLS enabled (cert + key loaded)");
+      log.info("[mqtt] mTLS enabled (cert + key loaded)");
     }
   }
 
-  console.log(`[mqtt] connecting to ${url}…`);
+  log.info(`[mqtt] connecting to ${url}…`);
   const c = mqtt.connect(url, opts);
   client = c;
 
   c.on("connect", () => {
-    console.log("[mqtt] connected");
+    log.info("[mqtt] connected");
     // Subscribe to telemetry + state topics from all stores.
     c.subscribe(
       [
@@ -56,7 +59,7 @@ export function initMqtt(): void {
       ],
       { qos: 1 },
       (err) => {
-        if (err) console.error("[mqtt] subscribe error:", err.message);
+        if (err) log.warn({ err: err.message }, "[mqtt] subscribe error");
       }
     );
     // Drain anything queued during disconnect.
@@ -66,13 +69,13 @@ export function initMqtt(): void {
     }
   });
 
-  c.on("error", (err) => console.error("[mqtt] error:", err.message));
-  c.on("offline", () => console.warn("[mqtt] offline"));
-  c.on("reconnect", () => console.log("[mqtt] reconnecting…"));
+  c.on("error", (err) => log.warn({ err: err.message }, "[mqtt] error"));
+  c.on("offline", () => log.warn("[mqtt] offline"));
+  c.on("reconnect", () => log.info("[mqtt] reconnecting…"));
 
   c.on("message", (topic, message) => {
     void handleMessage(topic, message).catch((err) =>
-      console.error("[mqtt] handler error:", err)
+      log.error({ err }, "[mqtt] handler error")
     );
   });
 }

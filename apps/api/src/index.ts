@@ -14,6 +14,8 @@ import { registerSpotifyRoutes } from "./spotify-routes";
 import dotenv from "dotenv";
 import helmet from "@fastify/helmet";
 
+import { setAppLogger } from "./logger";
+
 export { broadcast };
 
 dotenv.config();
@@ -21,6 +23,8 @@ dotenv.config();
 const fastify = Fastify({ logger: true });
 
 async function main() {
+  setAppLogger(fastify.log);
+
   await fastify.register(cors, { origin: process.env.DASHBOARD_ORIGIN?.split(",") ?? ["http://localhost:3000"] });
   await fastify.register(helmet, {
     contentSecurityPolicy: {
@@ -38,6 +42,7 @@ async function main() {
     },
     hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },
     frameguard: { action: "deny" },
+  });
   await fastify.register(websocket);
 
   registerLiveRoutes(fastify);

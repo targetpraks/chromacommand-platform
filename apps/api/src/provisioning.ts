@@ -4,6 +4,8 @@ import { stores, activityLog } from "@chromacommand/database/schema";
 import { eq } from "drizzle-orm";
 import { randomBytes, createPrivateKey, createPublicKey, sign as cryptoSign } from "node:crypto";
 
+import { appLog } from "./logger";
+
 /**
  * Edge gateway provisioning per PRD §22.
  *
@@ -64,10 +66,12 @@ function buildSelfSignedClientCert(publicKeyPem: string, storeId: string): { cer
 }
 
 export function registerProvisioningRoutes(fastify: FastifyInstance): void {
+  const log = appLog();
   // Operator-only endpoint to mint a code — gated by API key for now.
   fastify.post("/provision/issue", async (req, reply) => {
     const apiKey = (req.headers["x-admin-key"] as string) || "";
     if (apiKey !== process.env.PROVISION_ADMIN_KEY) {
+      log.warn({ event: "provisioning.attempt", storeId: (req.body as any)?.store_id, ip: req.ip }, "[provision] issue unauthorized");
       return reply.code(401).send({ error: "unauthorized" });
     }
     const body = req.body as any;
@@ -87,6 +91,7 @@ export function registerProvisioningRoutes(fastify: FastifyInstance): void {
 
     const entry = codes.get(code);
     if (!entry || entry.expiresAt < Date.now()) {
+      log.warn({ event: "provisioning.claim.fail", ip: req.ip, code }, "[provision] invalid or expired code");
       return reply.code(401).send({ error: "invalid or expired code" });
     }
 
@@ -109,6 +114,8 @@ export function registerProvisioningRoutes(fastify: FastifyInstance): void {
       details: { code, ip: req.ip },
       ipAddress: req.ip,
     });
+
+    log.info({ event: "provisioning.claim", storeId: entry.storeId, ip: req.ip }, "[provision] edge provisioned");
 
     return {
       store_id: entry.storeId,

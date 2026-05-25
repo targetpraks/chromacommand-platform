@@ -3,6 +3,8 @@ import { alertRules, alertEvents, sensorTelemetry, stores } from "@chromacommand
 import { and, eq, gte, sql, desc, isNull } from "drizzle-orm";
 import { broadcast } from "./live";
 
+import { appLog } from "./logger";
+
 /**
  * Alert engine — evaluates alert_rules against sensor_telemetry every 60s.
  * For each active rule:
@@ -26,6 +28,7 @@ const COMPARATORS = {
 let timer: NodeJS.Timeout | null = null;
 
 async function postWebhook(url: string, payload: Record<string, unknown>): Promise<boolean> {
+  const log = appLog();
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -34,7 +37,7 @@ async function postWebhook(url: string, payload: Record<string, unknown>): Promi
     });
     return res.ok;
   } catch (err) {
-    console.error("[alerts] webhook failed:", (err as Error).message);
+    log.warn({ err: (err as Error).message }, "[alerts] webhook failed");
     return false;
   }
 }
@@ -72,6 +75,7 @@ async function affectedStoreIds(rule: typeof alertRules.$inferSelect): Promise<s
 }
 
 async function evaluateRule(rule: typeof alertRules.$inferSelect): Promise<void> {
+  const log = appLog();
   if (!rule.active) return;
   const cmp = COMPARATORS[rule.comparator as keyof typeof COMPARATORS];
   if (!cmp) return;
@@ -153,7 +157,7 @@ async function evaluateRule(rule: typeof alertRules.$inferSelect): Promise<void>
         payload: { ruleId: rule.id, ruleName: rule.name, severity: rule.severity, observed, threshold: rule.threshold, message },
       });
 
-      console.log(`[alerts] 🔥 ${rule.severity} fired: ${rule.name} @ ${storeId} (obs=${observed.toFixed(2)})${delivered ? " [webhook ok]" : ""}`);
+      log.info(`[alerts] 🔥 ${rule.severity} fired: ${rule.name} @ ${storeId} (obs=${observed.toFixed(2)})${delivered ? " [webhook ok]" : ""}`);
     } else if (open && noneViolate) {
       // Auto-resolve.
       await db.update(alertEvents).set({ resolvedAt: new Date() }).where(eq(alertEvents.id, open.id));
@@ -162,26 +166,28 @@ async function evaluateRule(rule: typeof alertRules.$inferSelect): Promise<void>
         storeId,
         payload: { ruleId: rule.id, ruleName: rule.name, eventId: open.id },
       });
-      console.log(`[alerts] ✓ resolved: ${rule.name} @ ${storeId}`);
+      log.info(`[alerts] ✓ resolved: ${rule.name} @ ${storeId}`);
     }
   }
 }
 
 async function evalAll(): Promise<void> {
+  const log = appLog();
   const rules = await db.select().from(alertRules).where(eq(alertRules.active, true));
   for (const r of rules) {
     try {
       await evaluateRule(r);
     } catch (err) {
-      console.error(`[alerts] rule ${r.id} (${r.name}) failed:`, (err as Error).message);
+      log.error({ err: (err as Error).message }, `[alerts] rule ${r.id} (${r.name}) failed`);
     }
   }
 }
 
 export function startAlertsEngine(): void {
+  const log = appLog();
   if (timer) return;
-  console.log("[alerts] starting evaluation engine — every 60s");
-  void evalAll().catch((err) => console.error("[alerts] initial eval failed:", err));
+  log.info("[alerts] starting evaluation engine — every 60s");
+  void evalAll().catch((err) => log.error({ err }, "[alerts] initial eval failed"));
   timer = setInterval(() => void evalAll().catch(() => {}), 60_000);
   timer.unref?.();
 }

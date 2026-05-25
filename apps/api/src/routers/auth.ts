@@ -18,6 +18,7 @@ import {
   type AuthUser,
 } from "../auth";
 import { consume } from "../rate-limit.js";
+import { appLog } from "../logger";
 
 const LOGIN_WINDOW_MS = 60_000;
 // Failed-login budget per (ip, window) and per (email, window). 30 is a
@@ -61,6 +62,7 @@ export const authRouter = router({
   login: publicProcedure
     .input(z.object({ email: z.string().email(), password: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
+      const log = appLog();
       const ip =
         (ctx.req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
         ctx.req.ip ||
@@ -78,6 +80,7 @@ export const authRouter = router({
         const ipPeek = peek(ipKey, LOGIN_MAX_PER_WINDOW);
         const emailPeek = peek(emailKey, LOGIN_MAX_PER_WINDOW);
         if (!ipPeek.allowed || !emailPeek.allowed) {
+          log.warn({ event: "auth.login.ratelimit", email: input.email.toLowerCase(), ip });
           throw new TRPCError({
             code: "TOO_MANY_REQUESTS",
             message: `Too many failed login attempts. Try again in ${Math.ceil(
@@ -93,6 +96,7 @@ export const authRouter = router({
           consume(ipKey, { windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_WINDOW });
           consume(emailKey, { windowMs: LOGIN_WINDOW_MS, max: LOGIN_MAX_PER_WINDOW });
         }
+        log.warn({ event: "auth.login.failure", email: input.email.toLowerCase(), ip }, "[auth] login failed");
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
       }
       const tokens = await mintTokenPair(user, ip, ua);
@@ -118,6 +122,7 @@ export const authRouter = router({
   refresh: publicProcedure
     .input(z.object({ refreshToken: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      const log = appLog();
       const decoded = verifyRefreshToken(input.refreshToken);
       if (!decoded) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid refresh token" });
@@ -134,6 +139,7 @@ export const authRouter = router({
 
       if (row.revokedAt !== null) {
         // Reuse detection: revoke every still-active token for this user.
+        log.warn({ event: "auth.token.reuse", jti: decoded.jti, userId: row.userId }, "[auth] token reuse detected");
         await db
           .update(refreshTokens)
           .set({ revokedAt: new Date() })
