@@ -7,7 +7,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <AuthGate>
       <div className="flex">
         <Sidebar />
-        <main className="flex-1 ml-[240px] min-h-screen">{children}</main>
+        <main className="flex-1 lg:ml-[240px] min-h-screen pt-14 lg:pt-0">{children}</main>
       </div>
     </AuthGate>
   );
