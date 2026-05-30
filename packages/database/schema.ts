@@ -301,6 +301,7 @@ export const alertRules = pgTable("alert_rules", {
   targetId: varchar("target_id", { length: 32 }).notNull(),
   severity: varchar("severity", { length: 16 }).default("warning"),  // info|warning|critical
   webhookUrl: text("webhook_url"),                               // Slack/Teams/Discord webhook
+  emailRecipient: text("email_recipient"),                       // optional email recipient
   active: boolean("active").default(true),
   cooldownMinutes: integer("cooldown_minutes").default(15),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -322,6 +323,7 @@ export const alertEvents = pgTable("alert_events", {
   firedAt: timestamp("fired_at", { withTimezone: true }).defaultNow(),
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   webhookDelivered: boolean("webhook_delivered").default(false),
+  emailDelivered: boolean("email_delivered").default(false),
 });
 
 /**

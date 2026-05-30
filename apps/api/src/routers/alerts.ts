@@ -29,6 +29,7 @@ export const alertsRouter = router({
       targetId: z.string(),
       severity: z.enum(["info", "warning", "critical"]).default("warning"),
       webhookUrl: z.string().url().optional(),
+      emailRecipient: z.string().email().optional().nullable(),
       cooldownMinutes: z.number().int().min(1).max(1440).default(15),
       active: z.boolean().default(true),
     }))
@@ -47,6 +48,7 @@ export const alertsRouter = router({
         sustainedMinutes: z.number().int().min(0).max(1440).optional(),
         severity: z.enum(["info", "warning", "critical"]).optional(),
         webhookUrl: z.string().url().nullable().optional(),
+        emailRecipient: z.string().email().nullable().optional(),
         cooldownMinutes: z.number().int().min(1).max(1440).optional(),
         active: z.boolean().optional(),
       }),

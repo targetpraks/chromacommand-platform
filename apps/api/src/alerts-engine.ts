@@ -2,6 +2,7 @@ import { db } from "@chromacommand/database";
 import { alertRules, alertEvents, sensorTelemetry, stores } from "@chromacommand/database/schema";
 import { and, eq, gte, sql, desc, isNull } from "drizzle-orm";
 import { broadcast } from "./live";
+import nodemailer from "nodemailer";
 
 import { appLog } from "./logger";
 
@@ -38,6 +39,41 @@ async function postWebhook(url: string, payload: Record<string, unknown>): Promi
     return res.ok;
   } catch (err) {
     log.warn({ err: (err as Error).message }, "[alerts] webhook failed");
+    return false;
+  }
+}
+
+function getMailer() {
+  const host = process.env.SMTP_HOST;
+  if (!host) return null;
+  return nodemailer.createTransport({
+    host,
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: Number(process.env.SMTP_PORT) === 465,
+    auth: {
+      user: process.env.SMTP_USER ?? "",
+      pass: process.env.SMTP_PASS ?? "",
+    },
+  });
+}
+
+async function sendEmail(to: string, subject: string, text: string): Promise<boolean> {
+  const log = appLog();
+  const mailer = getMailer();
+  if (!mailer) {
+    log.warn("[alerts] SMTP not configured (SMTP_HOST missing)");
+    return false;
+  }
+  try {
+    await mailer.sendMail({
+      from: process.env.SMTP_FROM || "alerts@chromacommand.local",
+      to,
+      subject,
+      text,
+    });
+    return true;
+  } catch (err) {
+    log.warn({ err: (err as Error).message }, "[alerts] email failed");
     return false;
   }
 }
@@ -145,11 +181,17 @@ async function evaluateRule(rule: typeof alertRules.$inferSelect): Promise<void>
         })
         .returning();
 
-      let delivered = false;
+      let webhookDelivered = false;
+      let emailDelivered = false;
       if (rule.webhookUrl) {
-        delivered = await postWebhook(rule.webhookUrl, slackPayload(rule, storeId, observed, message));
-        await db.update(alertEvents).set({ webhookDelivered: delivered }).where(eq(alertEvents.id, event.id));
+        webhookDelivered = await postWebhook(rule.webhookUrl, slackPayload(rule, storeId, observed, message));
       }
+      if (rule.emailRecipient) {
+        const subject = `ChromaCommand Alert: ${rule.name} @ ${storeId}`;
+        const body = `${rule.name}\n\nStore: ${storeId}\nMetric: ${rule.metric}\nObserved: ${observed.toFixed(2)}\nThreshold: ${rule.comparator} ${rule.threshold}\nSeverity: ${rule.severity}\n\n${message}`;
+        emailDelivered = await sendEmail(rule.emailRecipient, subject, body);
+      }
+      await db.update(alertEvents).set({ webhookDelivered, emailDelivered }).where(eq(alertEvents.id, event.id));
 
       broadcast({
         type: "alert_fired",
@@ -157,7 +199,7 @@ async function evaluateRule(rule: typeof alertRules.$inferSelect): Promise<void>
         payload: { ruleId: rule.id, ruleName: rule.name, severity: rule.severity, observed, threshold: rule.threshold, message },
       });
 
-      log.info(`[alerts] 🔥 ${rule.severity} fired: ${rule.name} @ ${storeId} (obs=${observed.toFixed(2)})${delivered ? " [webhook ok]" : ""}`);
+      log.info(`[alerts] 🔥 ${rule.severity} fired: ${rule.name} @ ${storeId} (obs=${observed.toFixed(2)})${webhookDelivered ? " [webhook ok]" : ""}${emailDelivered ? " [email ok]" : ""}`);
     } else if (open && noneViolate) {
       // Auto-resolve.
       await db.update(alertEvents).set({ resolvedAt: new Date() }).where(eq(alertEvents.id, open.id));

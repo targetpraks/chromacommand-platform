@@ -24,6 +24,7 @@ export default function AlertsPage() {
     targetId: "all",
     severity: "warning" as "info" | "warning" | "critical",
     webhookUrl: "",
+    emailRecipient: "",
     cooldownMinutes: 15,
     description: "",
   });
@@ -36,7 +37,7 @@ export default function AlertsPage() {
           <Bell className="w-7 h-7 text-gold" />
           <div>
             <h1 className="text-2xl font-semibold">Alerts</h1>
-            <p className="text-sm text-on-surface-dim">Threshold rules over telemetry. Slack/Teams webhooks supported.</p>
+            <p className="text-sm text-on-surface-dim">Threshold rules over telemetry. Slack/Teams webhooks + SMTP email supported.</p>
           </div>
         </div>
         <Button onClick={() => evalNow.mutate()} disabled={evalNow.isPending} className="flex items-center gap-2">
@@ -68,6 +69,7 @@ export default function AlertsPage() {
               await create.mutateAsync({
                 ...form,
                 webhookUrl: form.webhookUrl.trim() || undefined,
+                emailRecipient: form.emailRecipient.trim() || undefined,
                 description: form.description.trim() || undefined,
                 active: true,
               });
@@ -101,6 +103,7 @@ export default function AlertsPage() {
           </select>
           <input value={form.targetId} onChange={(e) => setForm({ ...form, targetId: e.target.value })} className="col-span-2 cc-input" placeholder="target id (or 'all' for global)" />
           <input value={form.webhookUrl} onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })} className="col-span-3 cc-input" placeholder="Slack/Teams webhook URL (optional)" />
+          <input value={form.emailRecipient} onChange={(e) => setForm({ ...form, emailRecipient: e.target.value })} className="col-span-3 cc-input" placeholder="Email recipient for alerts (optional)" />
           {err && <div className="col-span-3 text-error text-sm">{err}</div>}
           <Button variant="primary" size="md" type="submit" disabled={create.isPending} className="col-span-3">
             {create.isPending ? "Saving…" : "Create rule"}
@@ -119,7 +122,7 @@ export default function AlertsPage() {
                   {r.name} <Badge variant={r.severity === "critical" ? "error" : r.severity === "warning" ? "warning" : "info"}>{r.severity}</Badge>
                 </div>
                 <div className="text-xs text-on-surface-dim">
-                  <code className="text-on-surface">{r.metric} {r.comparator} {r.threshold}</code> for {r.sustainedMinutes}m · {r.scope}:{r.targetId} · cd {r.cooldownMinutes}m
+                  <code className="text-on-surface">{r.metric} {r.comparator} {r.threshold}</code> for {r.sustainedMinutes}m · {r.scope}:{r.targetId} · cd {r.cooldownMinutes}m{r.webhookUrl ? " · webhook ✓" : ""}{r.emailRecipient ? " · email ✓" : ""}
                 </div>
               </div>
               <div className="flex items-center gap-2">
