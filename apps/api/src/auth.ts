@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { initTRPC } from "@trpc/server";
 import type { FastifyRequest } from "fastify";
-import jwt from "jsonwebtoken";
+import jwt, { type SignOptions } from "jsonwebtoken";
 import { db } from "@chromacommand/database";
 import { users } from "@chromacommand/database/schema";
 import { eq } from "drizzle-orm";
@@ -34,7 +34,7 @@ export function signToken(user: AuthUser): string {
   return jwt.sign(
     { sub: user.id, email: user.email, role: user.role, orgId: user.orgId, scope: user.scope, typ: "access" },
     JWT_SECRET,
-    { expiresIn: JWT_TTL }
+    { expiresIn: JWT_TTL as SignOptions["expiresIn"] }
   );
 }
 
