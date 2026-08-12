@@ -25,12 +25,13 @@ services:
       - redis_data:/data
 
   mqtt:
-    image: eclipse-mosquitto:2
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mqtt
     ports:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mqtt_data:/mosquitto/data
 
   seed:
