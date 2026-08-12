@@ -73,6 +73,11 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:4000
       NODE_ENV: development
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.chromacommand.rule=Host(`o3oc10fm2z0gzffee963rmkx.192.168.0.154.sslip.io`)"
+      - "traefik.http.routers.chromacommand.entryPoints=http"
+      - "traefik.http.services.chromacommand.loadbalancer.server.port=3000"
     depends_on:
       - api
     command: npm run dev --workspace=@chromacommand/dashboard
