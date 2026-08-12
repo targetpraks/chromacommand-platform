@@ -64,9 +64,6 @@ services:
     depends_on:
       - seed
       - mqtt
-    volumes:
-      - ./apps/api:/app/apps/api
-      - ./packages:/app/packages
     command: npm run dev --workspace=@chromacommand/api
 
   dashboard:
@@ -78,9 +75,6 @@ services:
       NODE_ENV: development
     depends_on:
       - api
-    volumes:
-      - ./apps/dashboard:/app/apps/dashboard
-      - ./packages:/app/packages
     command: npm run dev --workspace=@chromacommand/dashboard
 
   # Per-store edge gateway for local end-to-end testing.
