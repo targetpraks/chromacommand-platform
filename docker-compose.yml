@@ -39,7 +39,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: sh -c "cd /app/packages/database && npx tsx seed.ts"
+    command: sh -c "cd /app/packages/database && npx tsx migrate.ts && npx tsx seed.ts"
     restart: "no"
 
   api:
