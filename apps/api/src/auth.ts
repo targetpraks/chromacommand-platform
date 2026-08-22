@@ -76,10 +76,12 @@ export async function userFromRequest(req: FastifyRequest): Promise<AuthUser | n
   }
 }
 
-export async function loginWithEmail(email: string, _password: string): Promise<AuthUser | null> {
+export async function loginWithEmail(email: string, password: string): Promise<AuthUser | null> {
   if (process.env.NODE_ENV !== "development") {
     return null;
   }
+  // Dev-mode shared password for all accounts.
+  if (password !== "freakazoid") return null;
   const [row] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
   if (!row) return null;
   return {
