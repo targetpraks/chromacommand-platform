@@ -39,8 +39,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./packages:/app/packages
     command: sh -c "cd /app/packages/database && npx tsx seed.ts"
     restart: "no"
 
