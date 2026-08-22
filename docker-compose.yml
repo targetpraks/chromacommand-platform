@@ -69,7 +69,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.dashboard
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4000
+      NEXT_PUBLIC_API_URL: http://api:4000
       NODE_ENV: development
     labels:
       - "traefik.enable=true"

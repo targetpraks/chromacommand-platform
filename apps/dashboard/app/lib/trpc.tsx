@@ -29,9 +29,11 @@ export function setToken(token: string | null): void {
 
 const getBaseUrl = () => {
   if (typeof window !== "undefined") {
-    return (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000") + "/api/trpc";
+    // Client-side: use relative path (proxied by Next.js rewrite to the API container)
+    return "/api/trpc";
   }
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/trpc";
+  // Server-side: direct Docker network call
+  return "http://api:4000/api/trpc";
 };
 
 export function TRPCProvider({ children }: { children: ReactNode }) {
