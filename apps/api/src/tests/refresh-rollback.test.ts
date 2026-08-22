@@ -6,6 +6,16 @@ let hqToken = "";
 let hqRefresh = "";
 let hqUserId = "";
 
+// Skip live-API suites when no API instance is reachable (CI boots one).
+let apiUp = false;
+try {
+  const res = await fetch(`${baseURL}/api/trpc/health.ping`, { signal: AbortSignal.timeout(2500) });
+  apiUp = res.ok;
+} catch {
+  apiUp = false;
+}
+const describeIf = apiUp ? describe : describe.skip;
+
 async function login(email: string, password = "dev") {
   const res = await fetch(`${baseURL}/api/trpc/auth.login`, {
     method: "POST",
@@ -21,7 +31,8 @@ function authed(token: string): RequestInit {
   return { headers: { "Content-Type": "application/json", authorization: `Bearer ${token}` } };
 }
 
-beforeAll(async () => {
+const maybeBeforeAll = apiUp ? beforeAll : (() => {}) as typeof beforeAll;
+maybeBeforeAll(async () => {
   const data = await login("ricardo@infxmedia.co.za");
   hqToken = data.token;
   hqRefresh = data.refreshToken;
@@ -30,7 +41,7 @@ beforeAll(async () => {
   expect(hqRefresh).toBeTruthy();
 });
 
-describe("Refresh token rotation", () => {
+describeIf("Refresh token rotation", () => {
   it("auth.login returns both access + refresh tokens", () => {
     expect(hqToken.length).toBeGreaterThan(20);
     expect(hqRefresh.length).toBeGreaterThan(20);
@@ -115,7 +126,7 @@ describe("Refresh token rotation", () => {
   });
 });
 
-describe("Sync rollback", () => {
+describeIf("Sync rollback", () => {
   let firstCommandId = "";
 
   it("sync.transform creates a sync_transactions row", async () => {
@@ -242,7 +253,7 @@ describe("Sync rollback", () => {
   });
 });
 
-describe("Telemetry ingest", () => {
+describeIf("Telemetry ingest", () => {
   it("technician can POST sensor samples via telemetry.ingest", async () => {
     const tech = await login("tech@infxmedia.co.za");
     const res = await fetch(`${baseURL}/api/trpc/telemetry.ingest`, {

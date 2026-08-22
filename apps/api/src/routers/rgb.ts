@@ -1,31 +1,84 @@
-import { router, protectedProcedure, requireScope } from "../trpc";
+import { router, protectedProcedure, requireScope, requireRole } from "../trpc";
+import { scopeFromRequest } from "../scope";
 import { z } from "zod";
 import { db } from "@chromacommand/database";
 import { ledZones, rgbPresets, activityLog } from "@chromacommand/database/schema";
 import { eq, inArray } from "drizzle-orm";
-import { publishCommand } from "../mqtt";
 import { broadcast } from "../live";
-import { scopeFromRequest } from "../scope";
+import { dispatchToStores } from "../dispatch";
+
+export const RGB_MODES = ["solid", "gradient", "pulse", "chase", "breath", "sparkle", "wave", "rainbow"] as const;
 
 const setInput = z.object({
-  scope: z.enum(["global", "region", "store", "zone"]),
+  scope: z.enum(["global", "country", "province", "region", "city", "store"]),
   targetId: z.string(),
   zone: z.string().optional(),
   colour: z.object({
-    mode: z.string().default("solid"),
-    primary: z.string(),
-    secondary: z.string().optional(),
+    mode: z.enum(RGB_MODES).default("solid"),
+    primary: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+    secondary: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
     brightness: z.number().min(0).max(1).default(1.0),
-    speed: z.number().min(0).default(1.0),
+    speed: z.number().min(0).max(10).default(1.0),
   }),
+  /** Optional per-segment overrides: [{ name, startIndex, endIndex, primary }] */
+  segments: z
+    .array(
+      z.object({
+        name: z.string().optional(),
+        startIndex: z.number().int().min(0),
+        endIndex: z.number().int().min(0),
+        primary: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        mode: z.enum(RGB_MODES).optional(),
+      })
+    )
+    .max(16)
+    .optional(),
   fadeMs: z.number().min(0).max(30000).default(0),
 });
 
+async function applyZonesState(
+  storeIds: string[],
+  zone: string | undefined,
+  set: { currentColour: string; currentMode: string; maxBrightness: number }
+) {
+  if (zone) {
+    await db.update(ledZones).set({ ...set, lastHeartbeat: new Date() }).where(eq(ledZones.id, zone));
+    return;
+  }
+  for (const storeId of storeIds) {
+    await db.update(ledZones).set({ ...set, lastHeartbeat: new Date() }).where(eq(ledZones.storeId, storeId));
+  }
+}
+
 export const rgbRouter = router({
   listPresets: protectedProcedure.query(async () => {
-    const rows = await db.select().from(rgbPresets);
-    return rows.map((r) => ({ ...r }));
+    return db.select().from(rgbPresets);
   }),
+
+  createPreset: requireRole("hq_admin", "regional_manager")
+    .input(
+      z.object({
+        name: z.string().min(1).max(64),
+        description: z.string().max(512).optional(),
+        colours: z.record(z.string()),
+        mode: z.enum(RGB_MODES).default("solid"),
+        brightness: z.number().min(0).max(1).default(1.0),
+        speed: z.number().min(0).max(10).default(1.0),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const [row] = await db.insert(rgbPresets).values({ ...input, isGlobal: true }).returning();
+      return { id: row.id, status: "created" };
+    }),
+
+  deletePreset: requireRole("hq_admin")
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input }) => {
+      await db.delete(rgbPresets).where(eq(rgbPresets.id, input.id));
+      return { id: input.id, status: "deleted" };
+    }),
+
+  listModes: protectedProcedure.query(() => ({ modes: RGB_MODES })),
 
   getState: protectedProcedure
     .input(z.object({ storeId: z.string() }))
@@ -42,6 +95,7 @@ export const rgbRouter = router({
           status: z.status,
           displayName: z.displayName,
           ledCount: z.ledCount,
+          segments: (z.segments as any[]) ?? [],
         })),
       };
     }),
@@ -49,6 +103,7 @@ export const rgbRouter = router({
   multiGetState: protectedProcedure
     .input(z.object({ storeIds: z.array(z.string()) }))
     .query(async ({ input }) => {
+      if (input.storeIds.length === 0) return {};
       const rows = await db.select().from(ledZones).where(inArray(ledZones.storeId, input.storeIds));
       const byStore: Record<string, typeof rows> = {};
       for (const r of rows) {
@@ -69,6 +124,7 @@ export const rgbRouter = router({
               status: z.status,
               displayName: z.displayName,
               ledCount: z.ledCount,
+              segments: (z.segments as any[]) ?? [],
             })),
           },
         ])
@@ -76,34 +132,40 @@ export const rgbRouter = router({
     }),
 
   set: requireScope<z.infer<typeof setInput>>((i) =>
-    scopeFromRequest({ scope: i.scope === "zone" ? "store" : i.scope, targetId: i.targetId })
+    i.scope === "store" ? [`store:${i.targetId}`] : []
   )
     .input(setInput)
     .mutation(async ({ input, ctx }) => {
-      if (input.zone) {
-        await db
-          .update(ledZones)
-          .set({
-            currentColour: input.colour.primary,
-            currentMode: input.colour.mode,
-            maxBrightness: input.colour.brightness,
-            lastHeartbeat: new Date(),
-          })
-          .where(eq(ledZones.id, input.zone));
-      } else {
-        await db
-          .update(ledZones)
-          .set({
-            currentColour: input.colour.primary,
-            currentMode: input.colour.mode,
-            maxBrightness: input.colour.brightness,
-            lastHeartbeat: new Date(),
-          })
-          .where(eq(ledZones.storeId, input.targetId));
-      }
+      const set = {
+        currentColour: input.colour.primary,
+        currentMode: input.colour.mode,
+        maxBrightness: input.colour.brightness,
+      };
+
+      const { commandId, storeIds } = await dispatchToStores({
+        kind: "rgb.set",
+        scope: input.scope,
+        targetId: input.targetId,
+        payload: {
+          colour: input.colour.primary,
+          secondary: input.colour.secondary,
+          mode: input.colour.mode,
+          brightness: input.colour.brightness,
+          speed: input.colour.speed,
+          fade_ms: input.fadeMs,
+          ...(input.segments ? { segments: input.segments } : {}),
+        },
+        build: (storeId) => ({
+          topic: `chromacommand/store/${storeId}/rgb/set/${input.zone ?? "all"}`,
+          body: {},
+        }),
+        userId: ctx.user?.id,
+      });
+
+      await applyZonesState(storeIds, input.zone, set);
 
       await db.insert(activityLog).values({
-        userId: (ctx.user as any)?.id ?? null,
+        userId: ctx.user?.id ?? null,
         action: "rgb_set",
         scope: input.scope,
         targetId: input.targetId,
@@ -112,35 +174,85 @@ export const rgbRouter = router({
           colour: input.colour.primary,
           mode: input.colour.mode,
           brightness: input.colour.brightness,
+          stores: storeIds.length,
+          commandId,
         },
       });
 
-      const commandId = `cmd_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const topic = `chromacommand/store/${input.targetId}/rgb/set/${input.zone ?? "all"}`;
-      const payload = {
-        command_id: commandId,
-        colour: input.colour.primary,
-        mode: input.colour.mode,
-        brightness: input.colour.brightness,
-        speed: input.colour.speed,
-        fade_ms: input.fadeMs,
-        ts: Date.now(),
-      };
-
-      await publishCommand(topic, payload, 1);
-
-      broadcast({
-        type: "rgb_update",
-        storeId: input.targetId,
-        payload: { zone: input.zone ?? "all", colour: input.colour.primary, mode: input.colour.mode },
-      });
+      for (const storeId of storeIds) {
+        broadcast({
+          type: "rgb_update",
+          storeId,
+          payload: {
+            zone: input.zone ?? "all",
+            colour: input.colour.primary,
+            mode: input.colour.mode,
+            brightness: input.colour.brightness,
+            commandId,
+          },
+        });
+      }
 
       return {
         commandId,
         status: "dispatched",
-        targets: 1,
-        estimatedArrivalMs: 150,
-        mqttTopic: topic,
+        targets: storeIds.length,
+        estimatedArrivalMs: 150 + Math.min(storeIds.length * 20, 2000),
       };
+    }),
+
+  /** All zones off across a scope. */
+  blackout: requireScope<{ scope: string; targetId: string }>((i) =>
+    i.scope === "store" ? [`store:${i.targetId}`] : []
+  )
+    .input(z.object({ scope: z.enum(["global", "country", "province", "region", "city", "store"]), targetId: z.string(), fadeMs: z.number().min(0).max(10000).default(1000) }))
+    .mutation(async ({ input, ctx }) => {
+      const { commandId, storeIds } = await dispatchToStores({
+        kind: "rgb.blackout",
+        scope: input.scope,
+        targetId: input.targetId,
+        payload: { colour: "#000000", mode: "solid", brightness: 0, speed: 1, fade_ms: input.fadeMs },
+        build: (storeId) => ({
+          topic: `chromacommand/store/${storeId}/rgb/set/all`,
+          body: {},
+        }),
+        userId: ctx.user?.id,
+      });
+
+      for (const storeId of storeIds) {
+        await db.update(ledZones).set({ currentColour: "#000000", currentMode: "solid", maxBrightness: 0 }).where(eq(ledZones.storeId, storeId));
+        broadcast({ type: "rgb_update", storeId, payload: { zone: "all", colour: "#000000", mode: "off", commandId } });
+      }
+      await db.insert(activityLog).values({
+        userId: ctx.user?.id ?? null,
+        action: "rgb_blackout",
+        scope: input.scope,
+        targetId: input.targetId,
+        details: { stores: storeIds.length, commandId },
+      });
+      return { commandId, targets: storeIds.length };
+    }),
+
+  /** Flash one zone white so techs can find it on-site. */
+  identify: requireScope<{ zoneId: string }>(() => [])
+    .input(z.object({ zoneId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const [zone] = await db.select().from(ledZones).where(eq(ledZones.id, input.zoneId)).limit(1);
+      if (!zone) throw new Error("Zone not found");
+
+      const { commandId } = await dispatchToStores({
+        kind: "rgb.identify",
+        scope: "store",
+        targetId: zone.storeId,
+        payload: { colour: "#FFFFFF", mode: "sparkle", brightness: 1, speed: 4, fade_ms: 0, identify_seconds: 5 },
+        build: () => ({
+          topic: `chromacommand/store/${zone.storeId}/rgb/set/${zone.id}`,
+          body: {},
+        }),
+        userId: ctx.user?.id,
+      });
+
+      broadcast({ type: "rgb_update", storeId: zone.storeId, payload: { zone: zone.id, mode: "identify", commandId } });
+      return { commandId };
     }),
 });

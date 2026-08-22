@@ -698,3 +698,37 @@ Continued sequential work — operational polish on top of Phase 6.4.
 
 > **Sprint 3 complete. No blocked items.**
 
+
+---
+
+## ✅ Phase 7: Master Control — Hierarchy + Working Device Pipeline (2026-08-22)
+
+### 7A: Geographic hierarchy + scope engine
+- `countries → provinces → cities → stores` tables (migration 0003) + seed of SA network.
+- Scope levels: `* | country | province | region(city) | store`; `resolveStoreTargets()` expands any scope into concrete stores before EVERY dispatch.
+- `requireScope` now honours ancestor geo claims (region token covers its stores; province covers its cities).
+- New routers: `hierarchy` (tree + CRUD), `scenes` (multi-component TakeOvers), `commands` (ledger).
+
+### 7B: Command ledger + acks
+- Every dispatch (rgb/audio/content/sync/scenes) recorded in `commands` with resolved targets.
+- Devices ack via MQTT `command/ack` → per-device ack_state merged; status rolls dispatched→complete/partial/failed. `/commands` page shows the trail.
+
+### 7C: Edge gateway v2 — local MQTT device bus
+- LED/kiosk/audio nodes now speak MQTT against mosquitto on the gateway host (`chromacommand/local/…`). Replaces the dead ESP-NOW path (zeroed MAC, unreachable from Node).
+- Retained state restore, device registry w/ LWT, clean=false cloud session (QoS1 queued while offline), dedupe marked only AFTER success, failed acks propagate, sensor flush ack-gated.
+
+### 7D: Firmware v2 (all three targets)
+- LED: WiFi+MQTT, 8 modes, per-segment colour overrides, fade_ms crossfade, heartbeat+register, HTTP OTA hook, NVS provisioning (`CFG {json}` over serial — no committed credentials).
+- Kiosk player: disk-backed offline cache, register/heartbeat/LWT, commands set_playlist|push_asset|show_emergency|clear_overlay|reload|set_brightness|reboot, hardened Electron flags, safe template rendering.
+- Audio node: local bus (no more cloud double-handling), zones[] filtering, priority announce queue with ducking, execFile-only subprocesses (no shell injection), piper model via env.
+
+### 7E: Dashboard master console
+- Fixed AuthGate deadlock (/login was gated by itself).
+- `/control`: hierarchy tree selector drives Lighting / Music / Kiosks / Scenes tabs; emergency broadcast modal (screens + blackout + PA across scope).
+- `/fleet` device inventory, `/commands` ledger view, `/sponsor` page created (sidebar link previously 404'd).
+- Wired previously-dead controls: store All On/Off/Set All, audio skip/mute/volume, playlist library, Matrix "Sync All", sync page uses real presets + real store picker.
+- Shared router-stub regenerated to mirror the real API surface; stale duplicate shared files removed.
+
+### Verification
+- turbo typecheck ✅ · build ✅ · vitest ✅ (targets.test.ts unit suite; e2e self-skips without live API)
+- API boot smoke: health.ping OK, auth gates 401 correctly, /metrics resilient to DB outage.

@@ -1,5 +1,31 @@
 import { pgTable, uuid, varchar, text, jsonb, timestamp, doublePrecision, boolean, inet, integer, bigserial, index } from "drizzle-orm/pg-core";
 
+/**
+ * Geographic hierarchy — country → province → city → store.
+ * Scope strings map onto these levels:
+ *   country:{id} | province:{id} | region:{id} (alias for city) | store:{id}
+ */
+export const countries = pgTable("countries", {
+  id: varchar("id", { length: 32 }).primaryKey(),
+  name: varchar("name", { length: 128 }).notNull(),
+  code: varchar("code", { length: 8 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const provinces = pgTable("provinces", {
+  id: varchar("id", { length: 32 }).primaryKey(),
+  countryId: varchar("country_id", { length: 32 }).notNull().references(() => countries.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 128 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const cities = pgTable("cities", {
+  id: varchar("id", { length: 32 }).primaryKey(),
+  provinceId: varchar("province_id", { length: 32 }).notNull().references(() => provinces.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 128 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 export const orgs = pgTable("orgs", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 128 }).notNull(),
@@ -21,7 +47,10 @@ export const users = pgTable("users", {
 export const stores = pgTable("stores", {
   id: varchar("id", { length: 32 }).primaryKey(),
   name: varchar("name", { length: 128 }).notNull(),
-  regionId: varchar("region_id", { length: 32 }).notNull(),
+  regionId: varchar("region_id", { length: 32 }).notNull(), // legacy — kept equal to cityId
+  countryId: varchar("country_id", { length: 32 }).references(() => countries.id),
+  provinceId: varchar("province_id", { length: 32 }).references(() => provinces.id),
+  cityId: varchar("city_id", { length: 32 }).references(() => cities.id),
   address: text("address"),
   lat: doublePrecision("lat"),
   lon: doublePrecision("lon"),
@@ -45,6 +74,7 @@ export const ledZones = pgTable("led_zones", {
   maxBrightness: doublePrecision("max_brightness").default(1.0),
   currentColour: varchar("current_colour", { length: 7 }).default("#1B2A4A"),
   currentMode: varchar("current_mode", { length: 32 }).default("solid"),
+  segments: jsonb("segments").default("[]"),
   status: varchar("status", { length: 16 }).default("setup").notNull(),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -361,4 +391,70 @@ export const spotifyAuthStates = pgTable("spotify_auth_states", {
   scope: varchar("scope", { length: 16 }).notNull().default("global"),
   targetId: varchar("target_id", { length: 32 }).notNull().default("all"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+/**
+ * Unified device inventory — every controllable/reporting endpoint in a store.
+ * device_type: led_controller | screen_player | audio_player | gateway | sensor_hub
+ * entity_ref links a device to the specific zone/screen/audio-zone row it drives.
+ */
+export const devices = pgTable("devices", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  storeId: varchar("store_id", { length: 32 }).notNull().references(() => stores.id),
+  deviceType: varchar("device_type", { length: 32 }).notNull(),
+  label: varchar("label", { length: 128 }),
+  entityRef: varchar("entity_ref", { length: 64 }),
+  macAddress: varchar("mac_address", { length: 17 }),
+  ipAddress: inet("ip_address"),
+  firmwareVersion: varchar("firmware_version", { length: 32 }),
+  status: varchar("status", { length: 16 }).default("offline").notNull(),
+  lastSeen: timestamp("last_seen", { withTimezone: true }),
+  meta: jsonb("meta").default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (t) => ({
+  byStore: index("idx_devices_store").on(t.storeId),
+  byStatus: index("idx_devices_status").on(t.status),
+}));
+
+/**
+ * Command ledger — one row per dispatched control command with resolved
+ * targets and per-device acknowledgement state. Powers the command centre
+ * UI (status, retries) and closes the dispatch→ack loop.
+ *
+ * status: dispatched → partial | complete | failed
+ * ack_state: { [deviceId]: { status: "acked"|"failed"|"timeout", at, detail? } }
+ */
+export const commands = pgTable("commands", {
+  commandId: varchar("command_id", { length: 96 }).primaryKey(),
+  kind: varchar("kind", { length: 48 }).notNull(),
+  scope: varchar("scope", { length: 16 }).notNull(),
+  targetId: varchar("target_id", { length: 64 }).notNull(),
+  payload: jsonb("payload"),
+  targets: jsonb("targets").default("{}"),
+  ackState: jsonb("ack_state").default("{}"),
+  status: varchar("status", { length: 16 }).default("dispatched").notNull(),
+  retries: integer("retries").default(0).notNull(),
+  initiatedBy: uuid("initiated_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (t) => ({
+  byCreated: index("idx_commands_created").on(t.createdAt),
+}));
+
+/**
+ * Scenes — named multi-component presets (RGB + content playlist + audio).
+ * One scene = one TakeOver button on the console.
+ */
+export const scenes = pgTable("scenes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 64 }).notNull(),
+  description: text("description"),
+  presetId: uuid("preset_id").references(() => rgbPresets.id),
+  contentPlaylistId: uuid("content_playlist_id").references(() => playlists.id),
+  audioPlaylistId: uuid("audio_playlist_id").references(() => audioPlaylists.id),
+  audioVolume: doublePrecision("audio_volume"),
+  transitionMs: integer("transition_ms").default(3000),
+  orgId: uuid("org_id").references(() => orgs.id),
+  isGlobal: boolean("is_global").default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });

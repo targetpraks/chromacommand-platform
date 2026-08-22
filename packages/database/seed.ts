@@ -15,6 +15,7 @@ async function seed() {
   }
 
   console.log("🌱 Seeding Papa Pasta demo data...");
+  const now = Date.now();
 
   // ── Org ──
   const [org] = await db.insert(schema.orgs).values({
@@ -22,14 +23,38 @@ async function seed() {
     type: "franchise",
   }).returning();
 
+  // ── Geographic hierarchy: country → province → city ──
+  const [southAfrica] = await db.insert(schema.countries).values({
+    id: "south-africa", name: "South Africa", code: "ZA",
+  }).returning();
+
+  const insertedProvinces = await db.insert(schema.provinces).values([
+    { id: "western-cape", countryId: southAfrica.id, name: "Western Cape" },
+    { id: "gauteng", countryId: southAfrica.id, name: "Gauteng" },
+    { id: "kwazulu-natal", countryId: southAfrica.id, name: "KwaZulu-Natal" },
+  ]).returning();
+  const provinceByName = Object.fromEntries(insertedProvinces.map((p) => [p.id, p]));
+
+  const insertedCities = await db.insert(schema.cities).values([
+    { id: "cape-town", provinceId: provinceByName["western-cape"].id, name: "Cape Town" },
+    { id: "johannesburg", provinceId: provinceByName["gauteng"].id, name: "Johannesburg" },
+    { id: "durban", provinceId: provinceByName["kwazulu-natal"].id, name: "Durban" },
+  ]).returning();
+  const cityById = Object.fromEntries(insertedCities.map((c) => [c.id, c]));
+  const provinceForCity: Record<string, string> = {
+    "cape-town": "western-cape",
+    "johannesburg": "gauteng",
+    "durban": "kwazulu-natal",
+  };
+
   // ── Stores ──
   const stores = await db.insert(schema.stores).values([
-    { id: "pp-a01", name: "PP-A01 Cape Town CBD", regionId: "cape-town", address: "Shop 4, Wale Street, Cape Town CBD, 8001", status: "active", orgId: org.id },
-    { id: "pp-a02", name: "PP-A02 Gardens", regionId: "cape-town", address: "7 Kloof Street, Gardens, Cape Town, 8001", status: "active", orgId: org.id },
-    { id: "pp-a03", name: "PP-A03 Sea Point", regionId: "cape-town", address: "112 Main Road, Sea Point, Cape Town, 8005", status: "active", orgId: org.id },
-    { id: "pp-j01", name: "PP-J01 Sandton", regionId: "johannesburg", address: "Level 2, Sandton City, Sandton, 2196", status: "offline", orgId: org.id },
-    { id: "pp-j02", name: "PP-J02 Rosebank", regionId: "johannesburg", address: "The Zone, Rosebank, Johannesburg, 2196", status: "active", orgId: org.id },
-    { id: "pp-d01", name: "PP-D01 Umhlanga", regionId: "durban", address: "Gateway Mall, Umhlanga, Durban, 4319", status: "active", orgId: org.id },
+    { id: "pp-a01", name: "PP-A01 Cape Town CBD", regionId: "cape-town", cityId: cityById["cape-town"].id, provinceId: provinceForCity["cape-town"], countryId: southAfrica.id, address: "Shop 4, Wale Street, Cape Town CBD, 8001", status: "active", orgId: org.id },
+    { id: "pp-a02", name: "PP-A02 Gardens", regionId: "cape-town", cityId: cityById["cape-town"].id, provinceId: provinceForCity["cape-town"], countryId: southAfrica.id, address: "7 Kloof Street, Gardens, Cape Town, 8001", status: "active", orgId: org.id },
+    { id: "pp-a03", name: "PP-A03 Sea Point", regionId: "cape-town", cityId: cityById["cape-town"].id, provinceId: provinceForCity["cape-town"], countryId: southAfrica.id, address: "112 Main Road, Sea Point, Cape Town, 8005", status: "active", orgId: org.id },
+    { id: "pp-j01", name: "PP-J01 Sandton", regionId: "johannesburg", cityId: cityById["johannesburg"].id, provinceId: provinceForCity["johannesburg"], countryId: southAfrica.id, address: "Level 2, Sandton City, Sandton, 2196", status: "offline", orgId: org.id },
+    { id: "pp-j02", name: "PP-J02 Rosebank", regionId: "johannesburg", cityId: cityById["johannesburg"].id, provinceId: provinceForCity["johannesburg"], countryId: southAfrica.id, address: "The Zone, Rosebank, Johannesburg, 2196", status: "active", orgId: org.id },
+    { id: "pp-d01", name: "PP-D01 Umhlanga", regionId: "durban", cityId: cityById["durban"].id, provinceId: provinceForCity["durban"], countryId: southAfrica.id, address: "Gateway Mall, Umhlanga, Durban, 4319", status: "active", orgId: org.id },
   ]).returning();
 
   // ── LED Zones (8 per store) ──
@@ -56,6 +81,10 @@ async function seed() {
         ledCount: zt.ledCount,
         currentColour: zt.id === "undercounter" || zt.id === "table-1" ? "#C8A951" : (zt.id === "pickup" ? "#00D26A" : (zt.id === "counter-front" ? "#FFFFFF" : "#1B2A4A")),
         currentMode: zt.id === "wall-wash" ? "breath" : (zt.id === "signage" ? "pulse" : (zt.id === "undercounter" ? "gradient" : "solid")),
+        segments: [
+          { name: "main", startIndex: 0, endIndex: Math.floor(zt.ledCount * 0.7) - 1 },
+          { name: "accent", startIndex: Math.floor(zt.ledCount * 0.7), endIndex: zt.ledCount - 1 },
+        ],
         status: store.status === "offline" ? "offline" : "online",
       });
     }
@@ -89,6 +118,44 @@ async function seed() {
   }
   for (let i = 0; i < audioData.length; i += 50) {
     await db.insert(schema.audioZones).values(audioData.slice(i, i + 50));
+  }
+
+  // ── Device inventory — every controllable endpoint in each store ──
+  const deviceRows: any[] = [];
+  for (const store of stores) {
+    const online = store.status !== "offline";
+    deviceRows.push({
+      id: `gateway-${store.id}`, storeId: store.id, deviceType: "gateway",
+      label: "Edge Gateway", firmwareVersion: "1.2.0",
+      status: online ? "online" : "offline", lastSeen: new Date(now - Math.random() * 60_000),
+    });
+    for (const zt of zoneTemplates) {
+      deviceRows.push({
+        id: `${store.id}-${zt.id}-led`, storeId: store.id, deviceType: "led_controller",
+        label: `${zt.displayName} Controller`, entityRef: `${store.id}-${zt.id}`,
+        firmwareVersion: "2.0.0",
+        status: online ? "online" : "offline", lastSeen: new Date(now - Math.random() * 120_000),
+      });
+    }
+    for (const s of screensData.filter((s) => s.storeId === store.id)) {
+      deviceRows.push({
+        id: `${s.id}-player`, storeId: store.id, deviceType: "screen_player",
+        label: `${s.hardwareType ?? "Screen"} Player`, entityRef: s.id,
+        firmwareVersion: "2.0.0",
+        status: s.status === "online" ? "online" : "offline", lastSeen: new Date(now - Math.random() * 90_000),
+      });
+    }
+    for (const a of audioData.filter((a) => a.storeId === store.id)) {
+      deviceRows.push({
+        id: `${a.id}-audio`, storeId: store.id, deviceType: "audio_player",
+        label: `${a.sinkName} Node`, entityRef: a.id,
+        firmwareVersion: "2.0.0",
+        status: a.status === "online" ? "online" : "offline", lastSeen: new Date(now - Math.random() * 150_000),
+      });
+    }
+  }
+  for (let i = 0; i < deviceRows.length; i += 50) {
+    await db.insert(schema.devices).values(deviceRows.slice(i, i + 50));
   }
 
   // ── RGB Presets ──
@@ -154,7 +221,6 @@ async function seed() {
 
   // ── Sensor telemetry: last 24h, 15-min cadence, per store/metric ──
   const telemetryRows: any[] = [];
-  const now = Date.now();
   for (const store of stores) {
     for (let m = 0; m < 96; m++) {
       const ts = new Date(now - (95 - m) * 15 * 60_000);
@@ -213,9 +279,27 @@ async function seed() {
     });
   }
 
+  // ── Demo scene (multi-component TakeOver) ──
+  const navyPreset = insertedPresets.find((p) => p.name === "Navy & Gold Native");
+  const audioPlaylistsRows = await db.select().from(schema.audioPlaylists);
+  if (navyPreset && pl1 && audioPlaylistsRows.length > 0) {
+    await db.insert(schema.scenes).values({
+      name: "Brand Standard",
+      description: "Navy & Gold lighting, standard menu loop, ambient dining audio",
+      presetId: navyPreset.id,
+      contentPlaylistId: pl1.id,
+      audioPlaylistId: audioPlaylistsRows[0].id,
+      audioVolume: 0.45,
+      transitionMs: 3000,
+      orgId: org.id,
+      isGlobal: true,
+    });
+  }
+
   console.log("✅ Seed complete:");
   console.log(`   ${stores.length} stores, ${zonesData.length} LED zones, ${screensData.length} screens, ${audioData.length} audio zones`);
-  console.log(`   4 presets, 4 content assets, 1 playlist, 3 audio playlists, 50 activity log entries`);
+  console.log(`   ${deviceRows.length} devices, geo hierarchy: south-africa → 3 provinces → 3 cities`);
+  console.log(`   4 presets, 4 content assets, 1 playlist, 3 audio playlists, 1 scene, 50 activity log entries`);
   console.log(`   6 users (one per role), ${telemetryRows.length} telemetry samples, ${stores.length} gateway heartbeats`);
 }
 

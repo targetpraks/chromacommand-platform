@@ -42,7 +42,11 @@ export function registerMetrics(fastify: FastifyInstance): void {
 
     // Live-derived gauges.
     try {
-      const storeRows = await db.select({ id: stores.id, status: stores.status, region: stores.regionId }).from(stores);
+      const withTimeout = <T>(p: Promise<T>, ms = 3000): Promise<T | null> =>
+        Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+
+      const storeRows = await withTimeout(db.select({ id: stores.id, status: stores.status, region: stores.regionId }).from(stores));
+      if (!storeRows) throw new Error("db timeout");
       lines.push("# HELP cc_store_online 1 = online, 0 = offline");
       lines.push("# TYPE cc_store_online gauge");
       for (const s of storeRows) {
@@ -50,17 +54,21 @@ export function registerMetrics(fastify: FastifyInstance): void {
         lines.push(`cc_store_online{store_id="${s.id}",region="${s.region}"} ${v}`);
       }
 
-      const heartbeats = await db.execute(sql`
-        SELECT store_id, EXTRACT(EPOCH FROM (NOW() - MAX(last_seen)))::int AS seconds_since
-        FROM device_heartbeats
-        GROUP BY store_id
-      `);
-      lines.push("# HELP cc_store_last_heartbeat_seconds Seconds since last heartbeat");
-      lines.push("# TYPE cc_store_last_heartbeat_seconds gauge");
-      for (const row of heartbeats.rows as any[]) {
-        lines.push(
-          `cc_store_last_heartbeat_seconds{store_id="${row.store_id}"} ${row.seconds_since ?? -1}`
-        );
+      const heartbeats = await withTimeout(
+        db.execute(sql`
+          SELECT store_id, EXTRACT(EPOCH FROM (NOW() - MAX(last_seen)))::int AS seconds_since
+          FROM device_heartbeats
+          GROUP BY store_id
+        `)
+      );
+      if (heartbeats) {
+        lines.push("# HELP cc_store_last_heartbeat_seconds Seconds since last heartbeat");
+        lines.push("# TYPE cc_store_last_heartbeat_seconds gauge");
+        for (const row of heartbeats.rows as any[]) {
+          lines.push(
+            `cc_store_last_heartbeat_seconds{store_id="${row.store_id}"} ${row.seconds_since ?? -1}`
+          );
+        }
       }
     } catch {
       // DB might be unavailable at scrape time — emit only the in-memory counters.

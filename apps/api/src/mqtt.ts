@@ -1,10 +1,11 @@
 import mqtt, { MqttClient } from "mqtt";
 import { readFileSync, existsSync } from "node:fs";
 import { db } from "@chromacommand/database";
-import { sensorTelemetry, deviceHeartbeats, screens, activityLog } from "@chromacommand/database/schema";
+import { sensorTelemetry, deviceHeartbeats, screens, activityLog, devices, audioZones } from "@chromacommand/database/schema";
 import { eq } from "drizzle-orm";
 import { broadcast } from "./live";
 import { bumpCounter } from "./metrics";
+import { recordAck } from "./dispatch";
 
 import { appLog } from "./logger";
 
@@ -53,8 +54,10 @@ export function initMqtt(): void {
         "chromacommand/store/+/telemetry/heartbeat",
         "chromacommand/store/+/telemetry/sensors",
         "chromacommand/store/+/rgb/state/+",
+        "chromacommand/store/+/audio/state/+",
         "chromacommand/store/+/content/state",
         "chromacommand/store/+/screens/discover",
+        "chromacommand/store/+/command/ack",
         "chromacommand/store/+/firmware/state",
       ],
       { qos: 1 },
@@ -116,10 +119,11 @@ async function handleMessage(topic: string, raw: Buffer): Promise<void> {
   }
 
   if (kind === "telemetry" && sub === "heartbeat") {
+    const deviceId = body.device_id || `gateway-${storeId}`;
     await db
       .insert(deviceHeartbeats)
       .values({
-        deviceId: body.device_id || `gateway-${storeId}`,
+        deviceId,
         deviceType: body.device_type || "gateway",
         storeId,
         lastSeen: new Date(body.ts || Date.now()),
@@ -134,6 +138,11 @@ async function handleMessage(topic: string, raw: Buffer): Promise<void> {
           firmwareVersion: body.version || null,
         },
       });
+    // Mirror into the unified device inventory.
+    await db
+      .update(devices)
+      .set({ status: "online", lastSeen: new Date(body.ts || Date.now()), ...(body.version ? { firmwareVersion: body.version } : {}) })
+      .where(eq(devices.id, deviceId));
     broadcast({ type: "store_status", storeId, payload: { online: true, ts: Date.now() } });
     return;
   }
@@ -231,6 +240,43 @@ async function handleMessage(topic: string, raw: Buffer): Promise<void> {
   // PRD §6.8 — content state confirmation from screen players.
   if (kind === "content" && sub === "state") {
     broadcast({ type: "content_update", storeId, payload: body });
+    return;
+  }
+
+  // Audio zone state from audio nodes: chromacommand/store/{id}/audio/state/{zone}
+  // body: { status, volume, playlist_id?, track? }
+  if (kind === "audio" && sub === "state") {
+    const zone = parts[5] ?? "dining";
+    await db
+      .update(audioZones)
+      .set({
+        ...(body.status ? { status: body.status } : {}),
+        ...(typeof body.volume === "number" ? { volume: body.volume } : {}),
+        lastHeartbeat: new Date(),
+      })
+      .where(eq(audioZones.id, `${storeId}-${zone}`));
+    if (body.device_id) {
+      await db
+        .update(devices)
+        .set({ status: "online", lastSeen: new Date() })
+        .where(eq(devices.id, body.device_id));
+    }
+    broadcast({ type: "audio_update", storeId, payload: { zone, ...body } });
+    return;
+  }
+
+  // Command acknowledgements from the edge gateway:
+  // chromacommand/store/{id}/command/ack
+  // body: { command_id, device_id, entity_ref?, status: "executed"|"duplicate"|"failed", detail? }
+  if (kind === "command" && sub === "ack") {
+    if (!body.command_id) return;
+    const outcome = body.status === "failed" ? "failed" : "acked";
+    await recordAck(body.command_id, body.device_id || `gateway-${storeId}`, outcome as any, body.detail);
+    broadcast({
+      type: "command_ack",
+      storeId,
+      payload: { commandId: body.command_id, deviceId: body.device_id, status: body.status },
+    });
     return;
   }
 

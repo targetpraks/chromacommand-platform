@@ -5,6 +5,7 @@ import jwt, { type SignOptions } from "jsonwebtoken";
 import { db } from "@chromacommand/database";
 import { users } from "@chromacommand/database/schema";
 import { eq } from "drizzle-orm";
+import { satisfiesScopes } from "./targets";
 
 export type Role =
   | "hq_admin"
@@ -109,7 +110,8 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
 /**
  * Authorization helper. Pass a function that derives the resource scopes
  * (e.g. ["store:pp-a01"]) from the input. Allows when user has any matching
- * scope, "*" wildcard, or org-level scope that contains the resource.
+ * scope, "*" wildcard, or an ancestor geo claim that contains the resource
+ * (region:cape-town covers store:pp-a01; province:x covers its cities' stores).
  */
 export function requireScope<TInput>(
   resolver: (input: TInput) => string[]
@@ -123,11 +125,7 @@ export function requireScope<TInput>(
     if (required.length === 0) {
       return next({ ctx: { ...ctx, user: ctx.user } });
     }
-    const userScopes = ctx.user.scope;
-    if (userScopes.includes("*")) {
-      return next({ ctx: { ...ctx, user: ctx.user } });
-    }
-    const ok = required.every((r) => userScopes.includes(r));
+    const ok = await satisfiesScopes(ctx.user.scope, required);
     if (!ok) {
       throw new TRPCError({
         code: "FORBIDDEN",

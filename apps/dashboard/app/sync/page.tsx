@@ -7,97 +7,42 @@ import { trpc } from "../lib/trpc";
 import { RecentSyncs } from "../components/RecentSyncs";
 import { Button, Card, Badge, Spinner, StatusDot, Section } from "../components/ui";
 
-interface SyncPreset {
-  id: string;
-  name: string;
-  primary: string;
-  secondary: string;
-  sponsor: string;
-  rgbMode: string;
-  musicPreset: string;
-  contentPlaylist: string;
-}
-
-const syncPresets: SyncPreset[] = [
-  {
-    id: "mtn_takeover",
-    name: "MTN TakeOver",
-    primary: "#FFD100",
-    secondary: "#000000",
-    sponsor: "MTN",
-    rgbMode: "pulse",
-    musicPreset: "Afrobeats",
-    contentPlaylist: "MTN TakeOver Promo",
-  },
-  {
-    id: "fnb_takeover",
-    name: "FNB / RMB TakeOver",
-    primary: "#006B54",
-    secondary: "#CBA135",
-    sponsor: "FNB",
-    rgbMode: "solid",
-    musicPreset: "Lounge",
-    contentPlaylist: "FNB TakeOver Promo",
-  },
-  {
-    id: "navy_gold",
-    name: "Papa Pasta Native",
-    primary: "#1B2A4A",
-    secondary: "#C8A951",
-    sponsor: "—",
-    rgbMode: "solid",
-    musicPreset: "Jazz Hop",
-    contentPlaylist: "Standard Menu",
-  },
-  {
-    id: "late_night",
-    name: "Late Night",
-    primary: "#1B2A4A",
-    secondary: "#0A0B14",
-    sponsor: "—",
-    rgbMode: "breath",
-    musicPreset: "Deep House",
-    contentPlaylist: "Late Night Menu",
-  },
-];
-
 export default function SyncPage() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [scope, setScope] = useState("global");
+  const [storeTarget, setStoreTarget] = useState("pp-a01");
   const [executionResult, setExecutionResult] = useState<string | null>(null);
 
-  const { data: presets } = trpc.rgb.listPresets.useQuery(undefined as any);
+  const { data: presets } = trpc.rgb.listPresets.useQuery();
+  const { data: stores } = trpc.stores.list.useQuery();
   const syncMutation = trpc.sync.transform.useMutation({
     onSuccess: (data) => {
-      setExecutionResult(`✅ "${selectedPresetName}" activated across ${scope === "global" ? "all stores" : scope} · Command ${data.commandId}`);
+      setExecutionResult(`✅ "${selectedPresetName}" activated · Command ${data.commandId}`);
     },
     onError: (err) => {
       setExecutionResult(`❌ Failed: ${err.message}`);
     },
   });
 
-  const selectedPresetName = syncPresets.find(p => p.id === selectedPreset)?.name ?? "";
+  const selectedPresetName = (presets ?? []).find((p) => p.id === selectedPreset)?.name ?? "";
 
-  const handleTransform = async (preset: SyncPreset) => {
+  const handleTransform = async (presetId: string) => {
     setExecutionResult(null);
-    const dbPresetId = preset.id === "mtn_takeover" ? preset.id :
-                        preset.id === "fnb_takeover" ? preset.id :
-                        preset.id === "late_night" ? preset.id : "navy_gold";
 
     let actualScope: "global" | "region" | "store" = "global";
     let targetId = "all";
     if (scope.startsWith("region-")) {
       actualScope = "region";
       targetId = scope === "region-cpt" ? "cape-town" : "johannesburg";
-    } else if (scope.startsWith("store-")) {
+    } else if (scope === "store") {
       actualScope = "store";
-      targetId = "pp-a01";
+      targetId = storeTarget;
     }
 
     await syncMutation.mutateAsync({
       scope: actualScope,
       targetId,
-      presetId: dbPresetId,
+      presetId,
       effectiveAt: new Date().toISOString(),
       fadeDurationMs: 3000,
       components: { rgb: true, content: true, audio: true },
@@ -123,7 +68,7 @@ export default function SyncPage() {
           { id: "global", label: "All Stores" },
           { id: "region-cpt", label: "Cape Town Region" },
           { id: "region-jhb", label: "JHB Region" },
-          { id: "store-a01", label: "PP-A01 Only" },
+          { id: "store", label: "Single Store" },
         ].map((s) => (
           <button
             key={s.id}
@@ -137,11 +82,21 @@ export default function SyncPage() {
             {s.label}
           </button>
         ))}
+        {scope === "store" && (
+          <select className="cc-input !py-1.5 text-xs max-w-[220px]" value={storeTarget} onChange={(e) => setStoreTarget(e.target.value)}>
+            {(stores ?? []).map((s: any) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        )}
       </motion.div>
 
       {/* Preset grid */}
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4">
-        {syncPresets.map((preset, i) => {
+        {(presets ?? []).map((preset, i) => {
+          const colours = (preset.colours ?? {}) as Record<string, string>;
+          const primary = colours.all ?? Object.values(colours)[0] ?? "#1B2A4A";
+          const isSponsor = /mtn|fnb|vodacom|telkom|sponsor/i.test(preset.name);
           const isSelected = selectedPreset === preset.id;
           const isExecuting = syncMutation.isPending && isSelected;
           const isDone = executionResult !== null && isSelected && !isExecuting;
@@ -166,13 +121,13 @@ export default function SyncPage() {
                     <div
                       className="w-12 h-12 rounded-lg border border-white/10"
                       style={{
-                        background: `linear-gradient(135deg, ${preset.primary} 0%, ${preset.primary} 60%, ${preset.secondary} 100%)`,
+                        background: `linear-gradient(135deg, ${primary} 0%, ${primary} 60%, ${primary} 100%)`,
                       }}
                     />
                     <div>
                       <h3 className="font-semibold text-sm">{preset.name}</h3>
-                      {preset.sponsor !== "—" ? (
-                        <span className="text-[10px] text-gold font-medium">{preset.sponsor} TakeOver</span>
+                      {isSponsor ? (
+                        <span className="text-[10px] text-gold font-medium">Sponsor TakeOver</span>
                       ) : (
                         <span className="text-[10px] text-on-dark-secondary">Native Theme</span>
                       )}
@@ -196,13 +151,13 @@ export default function SyncPage() {
 
                 <div className="mt-4 flex items-center gap-4 text-[10px] text-on-dark-secondary">
                   <span className="flex items-center gap-1">
-                    <Lightbulb size={10} /> {preset.rgbMode}
+                    <Lightbulb size={10} /> {preset.mode}
                   </span>
                   <span className="flex items-center gap-1">
-                    <Monitor size={10} /> {preset.contentPlaylist}
+                    <Monitor size={10} /> {Math.round((preset.brightness ?? 1) * 100)}% brightness
                   </span>
                   <span className="flex items-center gap-1">
-                    <Music size={10} /> {preset.musicPreset}
+                    <Music size={10} /> RGB + Content + Audio
                   </span>
                 </div>
               </button>
@@ -218,7 +173,7 @@ export default function SyncPage() {
                     variant="primary"
                     size="md"
                     className="w-full"
-                    onClick={() => handleTransform(preset)}
+                    onClick={() => handleTransform(preset.id)}
                     disabled={syncMutation.isPending}
                   >
                     {syncMutation.isPending ? (

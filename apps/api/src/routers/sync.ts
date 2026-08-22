@@ -57,6 +57,20 @@ export const syncRouter = router({
         initiatedBy: (ctx.user as any)?.id ?? null,
       });
 
+      // Mirror into the unified command ledger for the command centre UI.
+      const { commands } = await import("@chromacommand/database/schema");
+      await db.insert(commands).values({
+        commandId,
+        kind: "sync.transform",
+        scope: input.scope,
+        targetId: input.targetId,
+        payload: { presetId: input.presetId, components: input.components, fadeDurationMs: input.fadeDurationMs },
+        targets: { stores: allStores.map((s) => s.id) },
+        ackState: {},
+        status: "dispatched",
+        initiatedBy: (ctx.user as any)?.id ?? null,
+      });
+
       for (const s of allStores) {
         if (input.components.rgb) {
           await db

@@ -3,6 +3,8 @@
   "dialect": "postgresql",
   "entries": [
     { "idx": 0, "version": "5", "when": 1745539200000, "tag": "0000_init", "breakpoints": false },
-    { "idx": 1, "version": "5", "when": 1745798400000, "tag": "0001_telemetry_views", "breakpoints": false }
+    { "idx": 1, "version": "5", "when": 1745798400000, "tag": "0001_telemetry_views", "breakpoints": false },
+    { "idx": 2, "version": "5", "when": 1745884800000, "tag": "0002_email_recipient", "breakpoints": false },
+    { "idx": 3, "version": "5", "when": 1755830400000, "tag": "0003_hierarchy", "breakpoints": false }
   ]
 }

@@ -1,14 +1,15 @@
 {
-  "name": "chromacommand-screen-player",
-  "version": "1.0.0",
+  "name": "@chromacommand/screen-player",
+  "version": "2.0.0",
   "private": true,
   "main": "player.js",
   "scripts": {
-    "start": "electron player.js",
-    "dev": "NODE_ENV=development electron player.js"
+    "start": "electron ."
   },
   "dependencies": {
-    "electron": "^29.0.0",
-    "ws": "^8.16.0"
+    "mqtt": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0"
   }
 }

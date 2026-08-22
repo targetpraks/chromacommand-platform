@@ -3,22 +3,25 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Grid, Monitor, Music, Settings, Zap, BarChart3, LayoutGrid, LogOut, HeartHandshake, Radio, Calendar, Cpu, Bell, Music2, Menu, X } from "lucide-react";
+import { Grid, Monitor, Music, Settings, Zap, BarChart3, LayoutGrid, LogOut, HeartHandshake, Calendar, Cpu, Bell, Music2, Menu, X, SlidersHorizontal, ListChecks, Boxes } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Badge } from "./ui";
 
 const navItems = [
+  { label: "Master Control", icon: SlidersHorizontal, href: "/control", badge: "CORE" },
   { label: "Matrix", icon: LayoutGrid, href: "/", badge: null as string | null },
   { label: "Stores", icon: Grid, href: "/stores", badge: null },
+  { label: "Fleet", icon: Boxes, href: "/fleet", badge: "NEW" },
+  { label: "Commands", icon: ListChecks, href: "/commands", badge: "NEW" },
   { label: "Content", icon: Monitor, href: "/content", badge: null },
   { label: "Audio", icon: Music, href: "/audio", badge: null },
-  { label: "Spotify", icon: Music2, href: "/spotify", badge: "NEW" },
+  { label: "Spotify", icon: Music2, href: "/spotify", badge: null },
   { label: "Sync", icon: Zap, href: "/sync", badge: null },
   { label: "Schedules", icon: Calendar, href: "/schedules", badge: null },
-  { label: "Firmware", icon: Cpu, href: "/firmware", badge: "NEW" },
+  { label: "Firmware", icon: Cpu, href: "/firmware", badge: null },
   { label: "Alerts", icon: Bell, href: "/alerts", badge: "NEW" },
   { label: "Analytics", icon: BarChart3, href: "/analytics", badge: null },
-  { label: "Sponsor", icon: HeartHandshake, href: "/sponsor", badge: "NEW" },
+  { label: "Sponsor", icon: HeartHandshake, href: "/sponsor", badge: null },
   { label: "Settings", icon: Settings, href: "/settings", badge: null },
 ];
 

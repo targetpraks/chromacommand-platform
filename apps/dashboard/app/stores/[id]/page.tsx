@@ -1,18 +1,32 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Monitor, Lightbulb, Music, ArrowLeft, RefreshCw, Zap } from "lucide-react";
+import { Monitor, Lightbulb, Music, ArrowLeft, RefreshCw, Zap, Power, PowerOff, Pencil } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { trpc } from "../../lib/trpc";
 import { StatusDot, ProgressBar, Badge, Button, Card, Spinner } from "../../components/ui";
 
 export default function StoreDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const storeId = params.id as string;
 
+  const utils = trpc.useUtils();
   const { data: store, isLoading, refetch } = trpc.stores.get.useQuery({ id: storeId });
   const { data: rgbState } = trpc.rgb.getState.useQuery({ storeId }, { refetchInterval: 3000 });
+  const setRgb = trpc.rgb.set.useMutation({ onSuccess: () => utils.rgb.getState.invalidate() });
+
+  const setAllZones = (mode: string) => {
+    const colour = mode === "off" ? "#000000" : prompt("Colour hex (#RRGGBB):", "#1B2A4A");
+    if (!colour) return;
+    setRgb.mutate({
+      scope: "store",
+      targetId: storeId,
+      colour: { mode: mode === "off" ? "solid" : (prompt("Effect:", "solid") ?? "solid") as any, primary: colour, brightness: mode === "off" ? 0 : 0.85, speed: 1 },
+      fadeMs: 500,
+    });
+  };
 
   if (isLoading || !store) {
     return (
@@ -43,7 +57,7 @@ export default function StoreDetailPage() {
             <Button variant="ghost" size="sm" onClick={() => refetch()}>
               <RefreshCw size={12} /> Refresh
             </Button>
-            <Button variant="primary" size="sm">
+            <Button variant="primary" size="sm" onClick={() => router.push("/control")}>
               <Zap size={12} /> Activate TakeOver
             </Button>
           </div>
@@ -66,9 +80,11 @@ export default function StoreDetailPage() {
               <Lightbulb size={16} /> LED Zones ({store.zones?.length || 0})
             </h2>
             <div className="flex gap-2">
-              <Button variant="ghost" size="sm">All On</Button>
-              <Button variant="ghost" size="sm">All Off</Button>
-              <Button variant="ghost" size="sm">Set All</Button>
+              <Button variant="ghost" size="sm" onClick={() => setAllZones("on")}><Power size={12} /> All On</Button>
+              <Button variant="ghost" size="sm" onClick={() => setRgb.mutate({ scope: "store", targetId: storeId, colour: { mode: "solid", primary: "#000000", brightness: 0, speed: 1 }, fadeMs: 500 })}>
+                <PowerOff size={12} /> All Off
+              </Button>
+              <Button variant="primary" size="sm" onClick={() => setAllZones("set")}><Pencil size={12} /> Set All</Button>
             </div>
           </div>
 

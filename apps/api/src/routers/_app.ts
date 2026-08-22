@@ -12,6 +12,9 @@ import { schedulesRouter } from "./schedules";
 import { firmwareRouter } from "./firmware";
 import { alertsRouter } from "./alerts";
 import { spotifyRouter } from "./spotify";
+import { hierarchyRouter } from "./hierarchy";
+import { scenesRouter } from "./scenes";
+import { commandsRouter } from "./commands";
 
 export const appRouter = router({
   auth: authRouter,
@@ -27,6 +30,9 @@ export const appRouter = router({
   firmware: firmwareRouter,
   alerts: alertsRouter,
   spotify: spotifyRouter,
+  hierarchy: hierarchyRouter,
+  scenes: scenesRouter,
+  commands: commandsRouter,
   health: router({
     ping: publicProcedure.query(() => ({ status: "ok", version: "1.2.0" })),
   }),

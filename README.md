@@ -11,38 +11,56 @@ Unified control plane for the **Papa Pasta** franchise network — RGB lighting,
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Dashboard (Next.js)  ─────────  Cloud API (Fastify + tRPC + WS)    │
-│                                  ├─ Auth (JWT + refresh-rotation)    │
-│                                  ├─ Schedules (node-cron)            │
-│                                  ├─ Alerts (60s eval engine)         │
-│                                  ├─ Provisioning (mTLS issue/renew)  │
-│                                  └─ Prometheus /metrics              │
-└─────────────────┬─────────────────────────┬─────────────────────────┘
-                  │ Postgres                │ MQTT (mqtts:// 8883)
-                  │ (23 tables)             │
-                  ▼                         ▼
+│   /control  ← Master Control      ├─ Auth (JWT + refresh-rotation)  │
+│   Hierarchy tree:                 ├─ Scope engine                   │
+│     Country → Province → City     │    (geo-tree expansion:         │
+│       → Store → Zone              │     country/province/region/     │
+│   Lighting · Music · Kiosks ·     │     store scopes fan out to      │
+│   Scenes · Emergency broadcast    │     every covered store)         │
+│                                   ├─ Command ledger (+ acks)        │
+│                                   ├─ Schedules / Alerts / OTA       │
+└─────────────────┬──────────────────────────┬────────────────────────┘
+                  │ Postgres                 │ MQTT (cloud broker)
+                  ▼                          ▼
             ┌───────────┐         ┌────────────────────────┐
             │ Postgres  │         │ Mosquitto / EMQX       │
-            │           │         │ (per-device mTLS)      │
             └───────────┘         └────────────┬───────────┘
                                                │
                                                ▼
                           ┌────────────────────────────────────┐
-                          │ Edge Gateway (per store)           │
-                          │  • SQLite cache                    │
-                          │  • Command dedup (PRD §21.2)       │
-                          │  • Sensor batch flush (60s)        │
-                          │  • Local REST + WS (port 5000)     │
-                          │  • Firmware fan-out                │
-                          └─┬───────────┬───────────┬──────────┘
-                            │           │           │
-              ESP-NOW / WS  │           │ HDMI/DP   │ I²S / line-out
-                            ▼           ▼           ▼
-                      ┌─────────┐ ┌─────────┐ ┌─────────────┐
-                      │ ESP32-S3│ │ Pi 5    │ │ Pi5+HiFiBerry│
-                      │ LED ctl │ │ E-Ink + │ │ Audio        │
-                      │         │ │ LCD     │ │              │
-                      └─────────┘ └─────────┘ └─────────────┘
+                          │ Edge Gateway v2 (per store)        │
+                          │  cloud ⇄ local bridge              │
+                          │  • SQLite cache + dedup + journal  │
+                          │  • Device registry (LWT online)    │
+                          │  • Sensor batch flush (ack-gated)  │
+                          │  • Local REST :5000                │
+                          └───────────────┬────────────────────┘
+                                          │ LOCAL MQTT (mosquitto on gateway)
+                    ┌─────────────────────┼─────────────────────┐
+                    ▼                     ▼                     ▼
+              ┌───────────┐        ┌───────────┐        ┌─────────────┐
+              │ ESP32-S3  │        │ Pi 5      │        │ Pi5+HiFiBerry│
+              │ LED ctl   │        │ Kiosk     │        │ Audio node   │
+              │ segments, │        │ offline   │        │ ducking TTS  │
+              │ fades,OTA │        │ cache     │        │ queue        │
+              └───────────┘        └───────────┘        └─────────────┘
 ```
+
+### Control hierarchy & scoping
+
+Scopes: `* | country:{id} | province:{id} | region:{id} (=city) | store:{id}`.
+`resolveStoreTargets()` expands any scope into concrete stores before every
+dispatch (`apps/api/src/targets.ts`), so "apply to Western Cape" reaches every
+store under it in one call. Every dispatch lands in the `commands` ledger;
+devices ack back over MQTT (`command/ack`) and the Command Centre page shows
+the full trail.
+
+### Device bus
+
+LED controllers, kiosks and audio nodes all speak **local MQTT** against a
+Mosquitto broker on the edge gateway host (`chromacommand/local/…` topics).
+Retained messages restore device state after reboots; LWTs drive online/offline
+inventory; command acks close the loop from dashboard click → device execution.
 
 ---
 

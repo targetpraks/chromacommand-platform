@@ -1,30 +1,53 @@
 /**
- * ChromaCommand Edge Gateway — MQTT Client for ThinkCentre Tiny M90q
- * Bridges cloud MQTT broker to local ESP-NOW mesh (LED controllers)
- * Also manages screen players and audio nodes via local MQTT
+ * ChromaCommand Edge Gateway v2 — per-store bridge on ThinkCentre Tiny.
+ *
+ * Architecture: cloud MQTT  ⇄  gateway  ⇄  local MQTT (device bus)
+ *
+ *   • LED controllers (ESP32-S3), kiosk players (Pi5/Electron) and audio
+ *     nodes all speak MQTT against a LOCAL broker running on the gateway
+ *     host (mosquitto, localhost:1883). One transport, retained state,
+ *     Last-Will offline detection — no ESP-NOW hop.
+ *
+ *   • The gateway subscribes to this store's topics on the cloud broker and
+ *     translates them onto the local bus; device state/acks/heartbeats flow
+ *     back up so the cloud command ledger closes the dispatch→ack loop.
+ *
+ *   • Offline resilience: clean:false + stable client id → the cloud broker
+ *     queues QoS1 commands while we're away. Retained messages on the local
+ *     bus restore device state after a reboot. Sensor samples buffer in
+ *     SQLite and flush only when the upstream publish is acked.
+ *
+ * Local topic map:
+ *   cc/local/rgb/{zone}/set            ← rgb/set/{zone}
+ *   cc/local/audio/{zone}/set          ← audio/set/{zone}
+ *   cc/local/audio/announce            ← audio/announce
+ *   cc/local/audio/playlist            ← audio/playlist
+ *   cc/local/audio/spotify/{action}    ← audio/spotify/{action}
+ *   cc/local/content/all/command       ← content/command | content/playlist
+ *   cc/local/firmware/install          ← firmware/install
+ *   cc/local/device/register|heartbeat|offline   (devices → gateway)
+ *   cc/local/device/ack                (devices → cloud command/ack)
+ *   cc/local/state/rgb|audio|content/… (devices → cloud state)
  */
 
 const mqtt = require('mqtt');
 const sqlite3 = require('sqlite3').verbose();
-const { WebSocketServer } = require('ws');
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
 const os = require('os');
 
 // ─── Configuration ────────────────────────────────────────────────────────
 const CONFIG = {
   storeId: process.env.STORE_ID || 'pp-a01',
   regionId: process.env.REGION_ID || 'cape-town',
-  mqttBrokerUrl: process.env.MQTT_BROKER_URL || 'mqtts://broker.chromacommand.io:8883',
-  mqttUsername: process.env.MQTT_USERNAME || '',
-  mqttPassword: process.env.MQTT_PASSWORD || '',
-  clientId: `edge-${process.env.STORE_ID || 'pp-a01'}-${Date.now()}`,
+  cloudBrokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
+  localBrokerUrl: process.env.LOCAL_MQTT_URL || 'mqtt://localhost:1883',
+  clientId: `edge-${process.env.STORE_ID || 'pp-a01'}`, // STABLE — clean:false session depends on it
   dbPath: process.env.DB_PATH || './edge_cache.db',
-  localMqttPort: parseInt(process.env.LOCAL_MQTT_PORT || '1883'),
-  heartbeatInterval: parseInt(process.env.HEARTBEAT_INTERVAL || '30000'),
-  syncInterval: parseInt(process.env.SYNC_INTERVAL || '60000'),
+  heartbeatInterval: parseInt(process.env.HEARTBEAT_INTERVAL || '30000', 10),
 };
+
+const CLOUD_PREFIX = 'chromacommand';
+const LOCAL_PREFIX = 'chromacommand/local';
 
 // ─── SQLite Local Cache ──────────────────────────────────────────────────
 const db = new sqlite3.Database(CONFIG.dbPath, (err) => {
@@ -32,17 +55,17 @@ const db = new sqlite3.Database(CONFIG.dbPath, (err) => {
   else console.log('📦 Local cache initialised');
 });
 
-// Setup tables
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS led_state (
       zone_id TEXT PRIMARY KEY,
       colour TEXT DEFAULT '#1B2A4A',
-      secondary TEXT DEFAULT '#C8A951',
-      brightness INTEGER DEFAULT 217,
+      secondary TEXT,
+      brightness REAL DEFAULT 0.85,
       mode TEXT DEFAULT 'solid',
       speed REAL DEFAULT 1.0,
-      updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+      segments TEXT,
+      updated_at INTEGER DEFAULT (strftime('%s','now'))
     )
   `);
   db.run(`
@@ -59,7 +82,7 @@ db.serialize(() => {
       playlist_id TEXT,
       volume REAL DEFAULT 0.5,
       status TEXT DEFAULT 'stopped',
-      updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+      source TEXT DEFAULT 'local'
     )
   `);
   db.run(`
@@ -69,31 +92,41 @@ db.serialize(() => {
       type TEXT,
       payload TEXT,
       status TEXT,
-      created_at INTEGER DEFAULT (strftime('%s', 'now'))
+      created_at INTEGER DEFAULT (strftime('%s','now'))
     )
   `);
-  // PRD §21.2: ring buffer of command_ids we've already executed.
-  // Duplicate command_id is acked but not re-applied.
+  // PRD §21.2 ring buffer — populated ONLY after successful execution so a
+  // failed command can be retried with the same id.
   db.run(`
     CREATE TABLE IF NOT EXISTS command_dedupe (
       command_id TEXT PRIMARY KEY,
-      seen_at INTEGER DEFAULT (strftime('%s', 'now'))
+      seen_at INTEGER DEFAULT (strftime('%s','now'))
     )
   `);
-  // Local sensor buffer — flushed every 60s as a batch upstream.
   db.run(`
     CREATE TABLE IF NOT EXISTS sensor_buffer (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       sensor_id TEXT,
       metric TEXT,
       value REAL,
-      recorded_at INTEGER DEFAULT (strftime('%s', 'now')),
+      recorded_at INTEGER DEFAULT (strftime('%s','now')),
       sent INTEGER DEFAULT 0
+    )
+  `);
+  // Device registry — who is on the local bus right now.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS device_registry (
+      device_id TEXT PRIMARY KEY,
+      device_type TEXT,
+      entity_ref TEXT,
+      version TEXT,
+      ip TEXT,
+      status TEXT DEFAULT 'online',
+      last_seen INTEGER DEFAULT (strftime('%s','now'))
     )
   `);
 });
 
-// Async helpers wrapped in promises so handlers can await.
 function dbRun(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function (err) { err ? reject(err) : resolve(this); });
@@ -110,411 +143,496 @@ function dbAll(sql, params = []) {
   });
 }
 
+/** True if we've already executed this id. Does NOT claim — mark only after success. */
 async function isDuplicateCommand(commandId) {
   if (!commandId) return false;
   const row = await dbGet('SELECT 1 FROM command_dedupe WHERE command_id = ?', [commandId]);
-  if (row) return true;
-  await dbRun('INSERT OR IGNORE INTO command_dedupe (command_id) VALUES (?)', [commandId]);
-  // Trim ring buffer to last 1000 entries.
-  await dbRun(`DELETE FROM command_dedupe WHERE command_id NOT IN
-    (SELECT command_id FROM command_dedupe ORDER BY seen_at DESC LIMIT 1000)`);
-  return false;
+  return !!row;
 }
 
-// ─── MQTT Cloud Client ────────────────────────────────────────────────────
-const mqttOptions = {
+async function markCommandSeen(commandId) {
+  if (!commandId) return;
+  await dbRun('INSERT OR IGNORE INTO command_dedupe (command_id) VALUES (?)', [commandId]);
+  await dbRun(`DELETE FROM command_dedupe WHERE rowid NOT IN
+    (SELECT rowid FROM command_dedupe ORDER BY rowid DESC LIMIT 1000)`);
+}
+
+// ─── Cloud MQTT Client ────────────────────────────────────────────────────
+const cloudOptions = {
   clientId: CONFIG.clientId,
-  username: CONFIG.mqttUsername,
-  password: CONFIG.mqttPassword,
+  username: process.env.MQTT_USERNAME || undefined,
+  password: process.env.MQTT_PASSWORD || undefined,
   reconnectPeriod: 5000,
   connectTimeout: 30000,
+  clean: false, // persistent session — broker queues QoS1 while we're offline
   rejectUnauthorized: process.env.MQTT_INSECURE !== '1',
 };
 
-// mTLS — load device cert/key/CA per PRD §22
-if (CONFIG.mqttBrokerUrl.startsWith('mqtts://')) {
+if (CONFIG.cloudBrokerUrl.startsWith('mqtts://')) {
   const certPath = process.env.MQTT_CLIENT_CERT || '/etc/chromacommand/cert.pem';
   const keyPath = process.env.MQTT_CLIENT_KEY || '/etc/chromacommand/key.pem';
   const caPath = process.env.MQTT_CA_CERT || '/etc/chromacommand/ca.pem';
-  if (fs.existsSync(certPath)) mqttOptions.cert = fs.readFileSync(certPath);
-  if (fs.existsSync(keyPath)) mqttOptions.key = fs.readFileSync(keyPath);
-  if (fs.existsSync(caPath)) mqttOptions.ca = fs.readFileSync(caPath);
-  if (mqttOptions.cert && mqttOptions.key) {
-    console.log('🔐 mTLS enabled — using device cert');
-  } else {
-    console.warn('⚠️  mqtts:// configured but no device cert found — connection will likely fail');
-  }
+  if (require('fs').existsSync(certPath)) cloudOptions.cert = require('fs').readFileSync(certPath);
+  if (require('fs').existsSync(keyPath)) cloudOptions.key = require('fs').readFileSync(keyPath);
+  if (require('fs').existsSync(caPath)) cloudOptions.ca = require('fs').readFileSync(caPath);
+  console.log(cloudOptions.cert && cloudOptions.key ? '🔐 mTLS enabled — using device cert' : '⚠️  mqtts:// configured but no device cert found');
 }
 
-const cloudClient = mqtt.connect(CONFIG.mqttBrokerUrl, mqttOptions);
+const cloud = mqtt.connect(CONFIG.cloudBrokerUrl, cloudOptions);
 
-cloudClient.on('connect', () => {
+cloud.on('connect', () => {
   console.log('☁️  Connected to cloud MQTT broker');
-  
-  // Subscribe to store-specific topics
+  const storeBase = `${CLOUD_PREFIX}/store/${CONFIG.storeId}`;
   const topics = [
-    `chromacommand/store/${CONFIG.storeId}/rgb/set/+`,
-    `chromacommand/store/${CONFIG.storeId}/rgb/schedule`,
-    `chromacommand/store/${CONFIG.storeId}/content/playlist`,
-    `chromacommand/store/${CONFIG.storeId}/content/diff`,
-    `chromacommand/store/${CONFIG.storeId}/audio/set/+`,
-    `chromacommand/store/${CONFIG.storeId}/audio/announce`,
-    `chromacommand/store/${CONFIG.storeId}/sync/transform`,
-    `chromacommand/global/rgb/set`,
-    `chromacommand/global/content/set`,
-    `chromacommand/global/audio/set`,
-    `chromacommand/region/${CONFIG.regionId}/rgb/set`,
-    `chromacommand/region/${CONFIG.regionId}/content/set`,
-    `chromacommand/store/${CONFIG.storeId}/firmware/install`,
-    `chromacommand/store/${CONFIG.storeId}/audio/spotify/play`,
-    `chromacommand/store/${CONFIG.storeId}/audio/spotify/pause`,
+    `${storeBase}/rgb/set/+`,
+    `${storeBase}/content/playlist`,
+    `${storeBase}/content/diff`,
+    `${storeBase}/content/command`,
+    `${storeBase}/audio/set/+`,
+    `${storeBase}/audio/playlist`,
+    `${storeBase}/audio/announce`,
+    `${storeBase}/sync/transform`,
+    `${storeBase}/firmware/install`,
+    `${storeBase}/audio/spotify/play`,
+    `${storeBase}/audio/spotify/pause`,
+    `${CLOUD_PREFIX}/global/rgb/set`,
+    `${CLOUD_PREFIX}/global/content/command`,
+    `${CLOUD_PREFIX}/global/audio/set`,
+    `${CLOUD_PREFIX}/region/${CONFIG.regionId}/rgb/set`,
+    `${CLOUD_PREFIX}/region/${CONFIG.regionId}/content/command`,
   ];
-  
-  cloudClient.subscribe(topics, (err) => {
-    if (err) console.error('Subscribe error:', err);
-    else console.log('📡 Subscribed to', topics.length, 'topics');
+  cloud.subscribe(topics, { qos: 1 }, (err) => {
+    if (err) console.error('Cloud subscribe error:', err.message);
+    else console.log('📡 Subscribed to', topics.length, 'cloud topics (qos1)');
   });
-  
-  // Start heartbeat
   startHeartbeat();
 });
 
-cloudClient.on('message', (topic, message) => {
-  handleCloudMessage(topic, message.toString());
+cloud.on('message', (topic, message) => {
+  handleCloudMessage(topic, message.toString()).catch((err) =>
+    console.error('cloud handler:', err.message)
+  );
 });
+cloud.on('error', (err) => console.error('MQTT error:', err.message));
+cloud.on('offline', () => console.log('☁️  Disconnected from cloud — offline mode'));
 
-cloudClient.on('error', (err) => {
-  console.error('MQTT error:', err.message);
-});
-
-cloudClient.on('disconnect', () => {
-  console.log('☁️  Disconnected from cloud — running offline mode');
-});
-
-// ─── Local Express + WebSocket Server ──────────────────────────────────────
-const app = express();
-app.use(express.json());
-
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', storeId: CONFIG.storeId, uptime: process.uptime() });
-});
-
-// Local REST endpoint for LED zones (used by ESP-NOW bridge)
-app.get('/api/v1/zones', (req, res) => {
-  db.all('SELECT * FROM led_state', [], (err, rows) => {
-    if (err) res.status(500).json({ error: err.message });
-    else res.json(rows);
+async function publishUpstream(topic, payload, qos = 1) {
+  return new Promise((resolve, reject) => {
+    cloud.publish(topic, JSON.stringify(payload), { qos }, (err) => (err ? reject(err) : resolve()));
   });
-});
+}
 
-app.get('/api/v1/content/:screenId/manifest', (req, res) => {
-  const screenId = req.params.screenId;
-  db.get('SELECT * FROM content_manifest WHERE screen_id = ?', [screenId], (err, row) => {
-    if (err) res.status(500).json({ error: err.message });
-    else res.json(row || { screen_id: screenId, hash: '', playlist_id: null });
+function ackUpstream(commandId, deviceId, status, detail) {
+  if (!cloud.connected) return;
+  publishUpstream(
+    `${CLOUD_PREFIX}/store/${CONFIG.storeId}/command/ack`,
+    { command_id: commandId, device_id: deviceId, status, detail, ts: Date.now() },
+    1
+  ).catch(() => {});
+}
+
+// ─── Local MQTT Client (device bus) ───────────────────────────────────────
+let local = null;
+let localReady = false;
+
+function connectLocal() {
+  local = mqtt.connect(CONFIG.localBrokerUrl, {
+    clientId: `edge-local-${CONFIG.storeId}`,
+    reconnectPeriod: 5000,
+    connectTimeout: 5000,
+    will: {
+      topic: `${LOCAL_PREFIX}/gateway/offline`,
+      payload: JSON.stringify({ store_id: CONFIG.storeId, ts: Date.now() }),
+      qos: 0,
+      retain: false,
+    },
   });
-});
 
-const httpServer = app.listen(5000, () => {
-  console.log('🔌 Local REST API on http://localhost:5000');
-});
-
-// ─── WebSocket for real-time dashboard (screen players + LED controllers) ─
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-const clients = new Map();
-
-wss.on('connection', (ws, req) => {
-  const clientId = `ws_${Date.now()}`;
-  clients.set(clientId, ws);
-  console.log(`🔌 WS client connected: ${clientId}`);
-  
-  ws.on('message', (data) => {
-    handleLocalMessage(JSON.parse(data.toString()));
+  local.on('connect', async () => {
+    if (localReady) return;
+    localReady = true;
+    console.log('🏠 Connected to local device bus');
+    local.subscribe(`${LOCAL_PREFIX}/#`, { qos: 1 }, () => {});
+    announceGatewayPresence();
+    await replayCachedState();
   });
-  
-  ws.on('close', () => {
-    clients.delete(clientId);
-    console.log(`🔌 WS client disconnected: ${clientId}`);
+
+  local.on('close', () => { localReady = false; });
+  local.on('error', (err) => console.error('local mqtt:', err.message));
+
+  local.on('message', (topic, message) => {
+    handleLocalBusMessage(topic, message.toString()).catch((err) =>
+      console.error('local handler:', err.message)
+    );
   });
-});
+}
+
+function localPublish(topic, payload, opts = {}) {
+  if (!localReady) return Promise.resolve(); // drop silently; devices re-sync via retain/replay
+  return new Promise((resolve) => {
+    local.publish(topic, JSON.stringify(payload), { qos: 1, ...opts }, () => resolve());
+  });
+}
+
+async function announceGatewayPresence() {
+  await localPublish(`${LOCAL_PREFIX}/gateway/online`, {
+    gateway_id: CONFIG.clientId,
+    store_id: CONFIG.storeId,
+    ts: Date.now(),
+  }, { qos: 0 });
+}
+
+/** Push cached lighting + audio state onto the bus so devices converge after any reboot. */
+async function replayCachedState() {
+  try {
+    const zones = await dbAll('SELECT * FROM led_state', []);
+    for (const z of zones) {
+      await localPublish(
+        `${LOCAL_PREFIX}/rgb/${z.zone_id}/set`,
+        {
+          colour: z.colour,
+          secondary: z.secondary,
+          mode: z.mode,
+          brightness: z.brightness,
+          speed: z.speed,
+          ...(z.segments ? { segments: JSON.parse(z.segments) } : {}),
+          restored: true,
+        },
+        { qos: 0 }
+      );
+    }
+    const audio = await dbAll('SELECT * FROM audio_state WHERE status != "stopped"', []);
+    for (const a of audio) {
+      await localPublish(`${LOCAL_PREFIX}/audio/${a.zone}/set`, {
+        action: 'restore', playlist_id: a.playlist_id, volume: a.volume, source: a.source,
+      }, { qos: 0 });
+    }
+    if (zones.length || audio.length) console.log(`♻️  Replayed state for ${zones.length} zones, ${audio.length} audio zones`);
+  } catch (err) {
+    console.error('state replay:', err.message);
+  }
+}
+
+connectLocal();
 
 // ─── Cloud Message Handler ───────────────────────────────────────────────
 async function handleCloudMessage(topic, messageStr) {
+  let payload;
   try {
-    const payload = JSON.parse(messageStr);
-    const commandId = payload.command_id || `local_${Date.now()}`;
+    payload = JSON.parse(messageStr);
+  } catch {
+    return;
+  }
+  const commandId = payload.command_id || `gw_${Date.now().toString(36)}`;
 
-    console.log(`📨 ${topic}:`, payload.command || payload.type || 'unknown');
+  console.log(`📨 ${topic}`);
 
-    // PRD §21.2 idempotency — silently ack duplicates without re-applying.
-    if (await isDuplicateCommand(payload.command_id)) {
-      console.log(`   (duplicate command_id ${payload.command_id} — ack only)`);
-      cloudClient.publish(
-        `chromacommand/store/${CONFIG.storeId}/command/ack`,
-        JSON.stringify({ command_id: commandId, status: 'duplicate', timestamp: Date.now() })
-      );
-      return;
-    }
+  // PRD §21.2 idempotency — duplicates are acked but not re-applied.
+  if (await isDuplicateCommand(commandId)) {
+    ackUpstream(commandId, `gateway-${CONFIG.storeId}`, 'duplicate');
+    return;
+  }
 
-    // Log command
-    db.run(
-      'INSERT INTO command_log (command_id, type, payload, status) VALUES (?, ?, ?, ?)',
-      [commandId, topic, messageStr, 'received']
-    );
+  await dbRun('INSERT INTO command_log (command_id, type, payload, status) VALUES (?, ?, ?, ?)', [
+    commandId, topic, messageStr.slice(0, 4000), 'received',
+  ]);
 
-    if (topic.includes('/rgb/set/')) {
-      await handleRgbCommand(payload, commandId, topic);
-    } else if (topic.includes('/content/')) {
-      await handleContentCommand(payload, commandId);
-    } else if (topic.includes('/audio/')) {
-      await handleAudioCommand(payload, commandId);
+  try {
+    // NOTE: spotify checks MUST come before the generic /audio/ match.
+    if (topic.includes('/audio/spotify/')) {
+      await forwardSpotifyCommand(topic, payload);
+    } else if (topic.includes('/rgb/set/') || topic.endsWith('/rgb/set')) {
+      await handleRgbCommand(payload, topic);
+    } else if (topic.includes('/content/playlist') || topic.includes('/content/diff')) {
+      await handleContentPlaylist(payload);
+    } else if (topic.includes('/content/command')) {
+      await handleContentCommand(payload);
+    } else if (topic.includes('/audio/announce')) {
+      await handleAudioAnnounce(payload);
+    } else if (topic.includes('/audio/playlist')) {
+      await handleAudioPlaylist(payload);
+    } else if (topic.includes('/audio/set/') || topic.endsWith('/audio/set')) {
+      await handleAudioCommand(payload, topic);
     } else if (topic.includes('/sync/transform')) {
       await handleSyncTransform(payload, commandId);
     } else if (topic.includes('/firmware/install')) {
-      await handleFirmwareInstall(payload, commandId);
-    } else if (topic.includes('/audio/spotify/')) {
-      await handleSpotifyCommand(topic, payload, commandId);
+      await handleFirmwareInstall(payload);
+    } else {
+      return; // unknown — leave dedupe untouched so a future version can handle it
     }
-    
-    // Update status
-    db.run('UPDATE command_log SET status = ? WHERE command_id = ?', ['executed', commandId]);
-    
-    // Send ACK to cloud
-    cloudClient.publish(
-      `chromacommand/store/${CONFIG.storeId}/command/ack`,
-      JSON.stringify({ command_id: commandId, status: 'executed', timestamp: Date.now() })
-    );
-    
+
+    await markCommandSeen(commandId);
+    await dbRun('UPDATE command_log SET status = ? WHERE command_id = ?', ['executed', commandId]);
+    ackUpstream(commandId, `gateway-${CONFIG.storeId}`, 'executed');
   } catch (err) {
-    console.error('Message handler error:', err.message);
+    console.error(`command ${commandId} failed:`, err.message);
+    await dbRun('UPDATE command_log SET status = ? WHERE command_id = ?', ['failed', commandId]);
+    ackUpstream(commandId, `gateway-${CONFIG.storeId}`, 'failed', err.message.slice(0, 200));
   }
 }
 
-// ─── RGB Command Handler ─────────────────────────────────────────────────
-async function handleRgbCommand(payload, commandId, topic) {
-  const zoneMatch = topic.match(/rgb\/set\/(.+)/);
-  const zone = zoneMatch ? zoneMatch[1] : 'all';
-  
-  // Update local cache
+// ─── RGB ──────────────────────────────────────────────────────────────────
+async function handleRgbCommand(payload, topic) {
+  const match = topic.match(/rgb\/set\/([^/?]+)/);
+  const zone = match ? match[1] : payload.zone || 'all';
+
   const colour = payload.colour || payload.primary || '#1B2A4A';
-  const secondary = payload.secondary || '#C8A951';
-  const brightness = Math.round((payload.brightness || 0.85) * 255);
+  const secondary = payload.secondary || null;
+  const brightness = typeof payload.brightness === 'number' ? payload.brightness : 0.85;
   const mode = payload.mode || 'solid';
   const speed = payload.speed || 1.0;
-  
-  const zonesToUpdate = zone === 'all' ? await getAllZones() : [zone];
-  
-  for (const z of zonesToUpdate) {
-    db.run(
-      `INSERT OR REPLACE INTO led_state (zone_id, colour, secondary, brightness, mode, speed) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [z, colour, secondary, brightness, mode, speed]
+  const segments = Array.isArray(payload.segments) ? payload.segments : undefined;
+
+  const targets = zone === 'all' ? await knownZones() : [zone];
+
+  for (const z of targets) {
+    await dbRun(
+      `INSERT OR REPLACE INTO led_state (zone_id, colour, secondary, brightness, mode, speed, segments)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [z, colour, secondary, brightness, mode, speed, segments ? JSON.stringify(segments) : null]
     );
-    
-    // Broadcast to ESP-NOW layer (via local WS to ESP-NOW bridge)
-    broadcastToLocalClients({
-      type: 'rgb',
-      zone: z,
-      cmd: 'set_colour',
-      primary: colour,
-      secondary: secondary,
-      brightness: brightness / 255,
-      mode: mode,
-      speed: speed,
-      fade_ms: payload.fade_ms || 2000,
-    });
+    // Retained → devices that reboot (or join later) get current state instantly.
+    await localPublish(
+      `${LOCAL_PREFIX}/rgb/${z}/set`,
+      { command_id: payload.command_id, zone: z, colour, secondary, mode, brightness, speed, fade_ms: payload.fade_ms ?? 0, segments },
+      { retain: true }
+    );
   }
-  
-  console.log(`🎨 RGB set for zones: ${zonesToUpdate.join(', ')}`);
+  console.log(`🎨 RGB ${colour}/${mode} → zones: ${targets.join(', ')}`);
 }
 
-function getAllZones() {
-  return new Promise((resolve, reject) => {
-    db.all('SELECT DISTINCT zone_id FROM led_state', [], (err, rows) => {
-      if (err) reject(err);
-      else {
-        const zones = rows.map(r => r.zone_id);
-        if (zones.length === 0) {
-          // Default zones for new store
-          resolve(['ceiling', 'window', 'undercounter', 'counter-front', 'pickup', 'signage']);
-        } else {
-          resolve(zones);
-        }
-      }
-    });
-  });
+async function knownZones() {
+  const rows = await dbAll('SELECT DISTINCT zone_id FROM led_state', []);
+  if (rows.length > 0) return rows.map((r) => r.zone_id);
+  // First boot before any state exists — broadcast topic reaches every controller.
+  return ['all'];
 }
 
-// ─── Content Command Handler ─────────────────────────────────────────────
-async function handleContentCommand(payload, commandId) {
-  const playlist = payload.playlist || payload;
-  const screens = playlist.screens || ['menu-primary', 'menu-combo', 'promo-board'];
-  
+// ─── Content / Kiosks ─────────────────────────────────────────────────────
+async function handleContentPlaylist(payload) {
+  const playlistId = payload.playlist_id || payload.preset_id || null;
+  const screens = Array.isArray(payload.screens) && payload.screens.length > 0 ? payload.screens : ['all'];
+
   for (const screenId of screens) {
-    db.run(
-      'INSERT OR REPLACE INTO content_manifest (screen_id, hash, playlist_id) VALUES (?, ?, ?)',
-      [screenId, payload.hash || '', playlist.playlist_id]
+    await dbRun('INSERT OR REPLACE INTO content_manifest (screen_id, hash, playlist_id, last_sync) VALUES (?, ?, ?, strftime(\'%s\',\'now\'))', [
+      screenId, payload.hash || '', playlistId,
+    ]);
+    await localPublish(
+      `${LOCAL_PREFIX}/content/${screenId}/command`,
+      { command_id: payload.command_id, cmd: 'set_playlist', playlist_id: playlistId, items: payload.items, hash: payload.hash },
+      { retain: true }
     );
   }
-  
-  // Forward to screen players via local WS
-  broadcastToLocalClients({
-    type: 'content',
-    cmd: 'set_playlist',
-    playlist: playlist,
-    screens: screens,
-  });
-  
-  console.log(`📺 Content set for screens: ${screens.join(', ')}`);
+  console.log(`📺 Playlist ${playlistId} → screens: ${screens.join(', ')}`);
 }
 
-// ─── Audio Command Handler ───────────────────────────────────────────────
-async function handleAudioCommand(payload, commandId) {
-  const zone = payload.zone || 'dining';
-  
-  db.run(
-    'INSERT OR REPLACE INTO audio_state (zone, playlist_id, volume, status) VALUES (?, ?, ?, ?)',
-    [zone, payload.playlist_id, payload.volume || 0.5, payload.action || 'play']
+/**
+ * Device-level kiosk commands from routers/content.ts screenCommand /
+ * pushAsset / emergencyMessage / clearOverlays:
+ *   cmd ∈ set_playlist | push_asset | show_emergency | clear_overlay |
+ *         reload | set_brightness | reboot | screenshot
+ */
+async function handleContentCommand(payload) {
+  const targetScreens = Array.isArray(payload.screen_ids) && payload.screen_ids.length > 0
+    ? payload.screen_ids
+    : await registeredScreens();
+
+  for (const screenId of targetScreens.length > 0 ? targetScreens : ['all']) {
+    await localPublish(`${LOCAL_PREFIX}/content/${screenId}/command`, {
+      command_id: payload.command_id, ...payload,
+    });
+  }
+  console.log(`🖥️  content/${payload.cmd} → ${targetScreens.join(', ') || 'all'}`);
+}
+
+async function registeredScreens() {
+  const rows = await dbAll("SELECT entity_ref FROM device_registry WHERE device_type = 'screen_player' AND status = 'online'", []);
+  return rows.map((r) => r.entity_ref).filter(Boolean);
+}
+
+// ─── Audio ────────────────────────────────────────────────────────────────
+async function handleAudioCommand(payload, topic) {
+  const match = topic.match(/audio\/set\/([^/?]+)/);
+  const zone = match ? match[1] : payload.zone || 'dining';
+
+  await dbRun(
+    `INSERT OR REPLACE INTO audio_state (zone, playlist_id, volume, status, source)
+     VALUES (?, ?, ?, ?, ?)`,
+    [zone, payload.playlist_id || null, payload.volume ?? 0.5, payload.action || 'play', payload.source || 'local']
   );
-  
-  // Forward to audio player via local WS
-  broadcastToLocalClients({
-    type: 'audio',
-    cmd: payload.cmd || payload.action || 'play',
-    zone: zone,
-    playlist_id: payload.playlist_id,
-    volume: payload.volume || 0.5,
-    fade_ms: payload.fade_ms || 2000,
-  });
-  
-  console.log(`🔊 Audio ${payload.action} for zone: ${zone}`);
+
+  await localPublish(
+    `${LOCAL_PREFIX}/audio/${zone}/set`,
+    {
+      command_id: payload.command_id,
+      action: payload.action || 'play',
+      playlist_id: payload.playlist_id,
+      volume: payload.volume,
+      fade_ms: payload.fade_ms ?? 0,
+      source: payload.source || 'local',
+      stream_url: payload.stream_url,
+    },
+    { retain: false }
+  );
+  console.log(`🔊 Audio ${payload.action} → ${zone}`);
 }
 
-// ─── Sync Transform Handler (One-Button TakeOver) ────────────────────────
+async function handleAudioAnnounce(payload) {
+  await localPublish(`${LOCAL_PREFIX}/audio/announce`, payload);
+  console.log(`📢 Announce queued (${Array.isArray(payload.zones) ? payload.zones.join(',') : 'dining'})`);
+}
+
+async function handleAudioPlaylist(payload) {
+  await localPublish(`${LOCAL_PREFIX}/audio/playlist`, payload);
+  console.log(`🎶 Audio playlist ${payload.playlist_id} pushed`);
+}
+
+async function forwardSpotifyCommand(topic, payload) {
+  const action = topic.endsWith('/play') ? 'play' : 'pause';
+  await localPublish(`${LOCAL_PREFIX}/audio/spotify/${action}`, {
+    command_id: payload.command_id, playlist_uri: payload.playlist_uri, position_ms: payload.position_ms,
+  });
+  console.log(`🎵 Spotify ${action}`);
+}
+
+// ─── Sync Transform (legacy one-button path — decompose to components) ───
 async function handleSyncTransform(payload, commandId) {
   const components = payload.components || { rgb: true, content: true, audio: true };
-  const fadeMs = payload.fade_duration_ms || 3000;
-  
-  console.log(`🔄 Sync transform starting (${fadeMs}ms fade)...`);
-  
-  const promises = [];
-  
+  const fadeMs = payload.fade_duration_ms ?? 3000;
+
   if (components.rgb) {
-    promises.push(handleRgbCommand({
-      primary: payload.rgb?.primary || '#FFD100',
-      secondary: payload.rgb?.secondary || '#CBA135',
+    await handleRgbCommand({
+      command_id: commandId,
+      colour: payload.rgb?.primary || payload.colour || '#FFD100',
+      secondary: payload.rgb?.secondary,
       mode: payload.rgb?.mode || 'solid',
-      brightness: payload.rgb?.brightness || 0.85,
+      brightness: payload.rgb?.brightness ?? 0.85,
       fade_ms: fadeMs,
-    }, commandId, `chromacommand/store/${CONFIG.storeId}/rgb/set/all`));
+    }, `${CLOUD_PREFIX}/store/x/rgb/set/all`);
   }
-  
-  if (components.content) {
-    promises.push(handleContentCommand({
-      playlist_id: payload.content?.playlist_id,
-      screens: payload.content?.screens,
-    }, commandId));
+  if (components.content && payload.content?.playlist_id) {
+    await handleContentPlaylist({ ...payload, playlist_id: payload.content.playlist_id, screens: payload.content.screens });
   }
-  
-  if (components.audio) {
-    promises.push(handleAudioCommand({
+  if (components.audio && payload.audio?.playlist_id) {
+    await handleAudioCommand({
+      command_id: commandId,
       action: 'play',
       zone: 'dining',
-      playlist_id: payload.audio?.playlist_id,
-      volume: payload.audio?.volume || 0.45,
+      playlist_id: payload.audio.playlist_id,
+      volume: payload.audio.volume ?? 0.45,
       fade_ms: fadeMs,
-    }, commandId));
+    }, `${CLOUD_PREFIX}/store/x/audio/set/dining`);
   }
-  
-  await Promise.all(promises);
-  console.log('✅ Sync transform complete');
+  console.log('🔄 Sync transform decomposed');
 }
 
-// ─── Spotify Command Handler ──────────────────────────────────────────────
-// Forwards play/pause to the local audio player WS so it can drive
-// librespot (or its embedded Spotify Connect client) directly.
-async function handleSpotifyCommand(topic, payload, commandId) {
-  const action = topic.endsWith('/play') ? 'play' : topic.endsWith('/pause') ? 'pause' : 'unknown';
-  console.log(`🎵 Spotify ${action}:`, payload.playlist_uri || '');
+// ─── Firmware fan-out ──────────────────────────────────────────────────────
+async function handleFirmwareInstall(payload) {
+  await localPublish(`${LOCAL_PREFIX}/firmware/install`, payload);
+  console.log(`📦 firmware/install v${payload.version} (${payload.device_class}) fanned out`);
+}
 
-  // Update local audio_state cache so a restart restores playback.
-  if (action === 'play' && payload.playlist_uri) {
-    db.run(
-      'INSERT OR REPLACE INTO audio_state (zone, playlist_id, volume, status) VALUES (?, ?, ?, ?)',
-      ['dining', payload.playlist_uri, 0.5, 'playing']
-    );
+// ─── Local bus → cloud relays ──────────────────────────────────────────────
+const lastRelayByDevice = new Map();
+const RELAY_THROTTLE_MS = 55_000;
+
+async function handleLocalBusMessage(topic, messageStr) {
+  let body;
+  try {
+    body = JSON.parse(messageStr);
+  } catch {
+    return;
   }
+  const parts = topic.split('/'); // chromacommand/local/...
 
-  broadcastToLocalClients({
-    type: 'spotify',
-    action,
-    command_id: commandId,
-    playlist_uri: payload.playlist_uri,
-    position_ms: payload.position_ms || 0,
-    started_at: payload.started_at,
-  });
-}
-
-// ─── Firmware Install Handler ─────────────────────────────────────────────
-// Forwards the install command to local devices over WS.  Devices download
-// from `payload.url`, verify SHA-256, flash, then send {type:"fw_ack",
-// device_id, outcome, error?} back over WS.  We aggregate and publish
-// ack to the cloud.
-async function handleFirmwareInstall(payload, commandId) {
-  const deploymentId = payload.deployment_id;
-  console.log(`📦 Firmware install — class=${payload.device_class} v${payload.version} dep=${deploymentId}`);
-
-  // Fan out to every local device of the matching class.  ESP32 / Pi
-  // listens on the local WS for {type:"firmware_install"}.
-  broadcastToLocalClients({
-    type: 'firmware_install',
-    deployment_id: deploymentId,
-    device_class: payload.device_class,
-    version: payload.version,
-    url: payload.url,
-    sha256: payload.sha256,
-    size_bytes: payload.size_bytes,
-  });
-
-  // The local devices will report back via handleLocalMessage(); we forward
-  // each ack as its own MQTT publish so the cloud tally is real-time.
-}
-
-function handleLocalMessage(message) {
-  // Handle messages from local devices (ESP32, screen players, audio nodes)
-  if (message.type === 'heartbeat') {
-    console.log(`💓 Heartbeat from ${message.device_type}: ${message.device_id}`);
-  } else if (message.type === 'ack') {
-    console.log(`✅ ACK from ${message.device_id}: ${message.status}`);
-  } else if (message.type === 'fw_ack') {
-    // Forward firmware install result to cloud.
-    cloudClient.publish(
-      `chromacommand/store/${CONFIG.storeId}/firmware/state`,
-      JSON.stringify({
-        deployment_id: message.deployment_id,
-        device_id: message.device_id,
-        outcome: message.outcome,
-        error: message.error || null,
-        ts: Date.now(),
-      }),
-      { qos: 1 }
-    );
-    console.log(`📦 Firmware ack ${message.device_id}: ${message.outcome}`);
-  }
-}
-
-// ─── Broadcast to Local WS Clients ────────────────────────────────────────
-function broadcastToLocalClients(message) {
-  const msgStr = JSON.stringify(message);
-  for (const [id, ws] of clients) {
-    if (ws.readyState === 1) { // OPEN
-      ws.send(msgStr);
+  // Device lifecycle
+  if (parts[3] === 'device') {
+    const event = parts[4];
+    if (event === 'register' || event === 'heartbeat') {
+      await upsertDevice(body, event === 'register' ? true : undefined);
+      relayHeartbeat(body);
+    } else if (event === 'offline') {
+      await dbRun("UPDATE device_registry SET status = 'offline' WHERE device_id = ?", [body.device_id]);
+      console.log(`🔌 LWT offline: ${body.device_id}`);
     }
+    return;
+  }
+
+  // Command acknowledgements from individual devices
+  if (parts[3] === 'command' && parts[4] === 'ack') {
+    if (body.command_id && cloud.connected) {
+      await publishUpstream(
+        `${CLOUD_PREFIX}/store/${CONFIG.storeId}/command/ack`,
+        { ...body, ts: body.ts || Date.now() },
+        1
+      ).catch(() => {});
+    }
+    return;
+  }
+
+  // OTA results from devices
+  if (parts[3] === 'firmware' && parts[4] === 'state') {
+    if (cloud.connected) {
+      await publishUpstream(`${CLOUD_PREFIX}/store/${CONFIG.storeId}/firmware/state`, { ...body, ts: Date.now() }, 1).catch(() => {});
+    }
+    return;
+  }
+
+  // State reports
+  if (parts[3] === 'state') {
+    const kind = parts[4];
+    const entity = parts[5];
+    if (!cloud.connected) return;
+    if (kind === 'rgb' && entity) {
+      await publishUpstream(`${CLOUD_PREFIX}/store/${CONFIG.storeId}/rgb/state/${entity}`, body, 0).catch(() => {});
+    } else if (kind === 'audio' && entity) {
+      await publishUpstream(`${CLOUD_PREFIX}/store/${CONFIG.storeId}/audio/state/${entity}`, body, 0).catch(() => {});
+    } else if (kind === 'content' && entity) {
+      await publishUpstream(`${CLOUD_PREFIX}/store/${CONFIG.storeId}/content/state`, { screen_id: entity, ...body }, 0).catch(() => {});
+    }
+    return;
   }
 }
 
-// ─── Heartbeat ─────────────────────────────────────────────────────────────
+async function upsertDevice(body, isRegister) {
+  if (!body.device_id) return;
+  await dbRun(
+    `INSERT INTO device_registry (device_id, device_type, entity_ref, version, ip, status, last_seen)
+     VALUES (?, ?, ?, ?, ?, 'online', strftime('%s','now'))
+     ON CONFLICT(device_id) DO UPDATE SET
+       device_type = COALESCE(excluded.device_type, device_type),
+       entity_ref = COALESCE(excluded.entity_ref, entity_ref),
+       version = COALESCE(excluded.version, version),
+       ip = COALESCE(excluded.ip, ip),
+       status = 'online',
+       last_seen = strftime('%s','now')`,
+    [body.device_id, body.device_type || null, body.entity_ref || null, body.version || null, body.ip || null]
+  );
+  if (isRegister) console.log(`🆔 Registered ${body.device_type}: ${body.device_id}`);
+}
+
+function relayHeartbeat(body) {
+  if (!body.device_id || !cloud.connected) return;
+  const last = lastRelayByDevice.get(body.device_id) || 0;
+  const now = Date.now();
+  if (now - last < RELAY_THROTTLE_MS) return;
+  lastRelayByDevice.set(body.device_id, now);
+  publishUpstream(
+    `${CLOUD_PREFIX}/store/${CONFIG.storeId}/telemetry/heartbeat`,
+    {
+      device_id: body.device_id,
+      device_type: body.device_type || 'unknown',
+      entity_ref: body.entity_ref,
+      store_id: CONFIG.storeId,
+      ts: now,
+      ip: body.ip || null,
+      version: body.version || null,
+    },
+    0
+  ).catch(() => {});
+}
+
+// ─── Gateway heartbeat ─────────────────────────────────────────────────────
 function localIp() {
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
@@ -525,29 +643,79 @@ function localIp() {
   return null;
 }
 
-// Heartbeat — payload shape matches apps/api/src/mqtt.ts handleMessage()
-// which writes into device_heartbeats (device_id, device_type, store_id,
-// last_seen, ip_address, firmware_version).
+let heartbeatTimer = null;
 function startHeartbeat() {
-  setInterval(() => {
-    cloudClient.publish(
-      `chromacommand/store/${CONFIG.storeId}/telemetry/heartbeat`,
-      JSON.stringify({
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(() => {
+    if (!cloud.connected) return;
+    publishUpstream(
+      `${CLOUD_PREFIX}/store/${CONFIG.storeId}/telemetry/heartbeat`,
+      {
         device_id: `gateway-${CONFIG.storeId}`,
         device_type: 'gateway',
         store_id: CONFIG.storeId,
         ts: Date.now(),
         ip: localIp(),
-        version: '1.2.0',
+        version: '2.0.0',
         uptime_s: Math.floor(process.uptime()),
-      }),
-      { qos: 0 }  // PRD §21.1: heartbeat is lossy-ok
-    );
+      },
+      0
+    ).catch(() => {});
   }, CONFIG.heartbeatInterval);
 }
 
-// Sensor publisher — batches buffered samples every 60s, payload shape
-// matches the API ingestor: { samples: [{ sensor_id, metric, value, recorded_at }] }
+// ─── Local REST API (techs + sensors) ─────────────────────────────────────
+const app = express();
+app.use(express.json());
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    storeId: CONFIG.storeId,
+    cloudConnected: cloud.connected,
+    localBusReady: localReady,
+    uptime: Math.floor(process.uptime()),
+  });
+});
+
+app.get('/api/v1/zones', (req, res) => {
+  db.all('SELECT * FROM led_state', [], (err, rows) => {
+    if (err) res.status(500).json({ error: err.message });
+    else res.json(rows);
+  });
+});
+
+app.get('/api/v1/devices', (req, res) => {
+  db.all('SELECT * FROM device_registry ORDER BY last_seen DESC', [], (err, rows) => {
+    if (err) res.status(500).json({ error: err.message });
+    else res.json(rows);
+  });
+});
+
+app.get('/api/v1/content/:screenId/manifest', (req, res) => {
+  db.get('SELECT * FROM content_manifest WHERE screen_id = ?', [req.params.screenId], (err, row) => {
+    if (err) res.status(500).json({ error: err.message });
+    else res.json(row || { screen_id: req.params.screenId, hash: '', playlist_id: null });
+  });
+});
+
+app.post('/api/v1/sensors/ingest', async (req, res) => {
+  const { sensor_id, metric, value, recorded_at } = req.body || {};
+  if (!sensor_id || !metric || typeof value !== 'number') {
+    return res.status(400).json({ error: 'sensor_id, metric, value required' });
+  }
+  const recAt = recorded_at ? Math.floor(new Date(recorded_at).getTime() / 1000) : Math.floor(Date.now() / 1000);
+  await dbRun('INSERT INTO sensor_buffer (sensor_id, metric, value, recorded_at) VALUES (?, ?, ?, ?)', [
+    sensor_id, metric, value, recAt,
+  ]);
+  res.json({ buffered: true });
+});
+
+const httpServer = app.listen(5000, () => {
+  console.log('🔌 Local REST API on http://localhost:5000');
+});
+
+// ─── Sensor flush — marks sent ONLY after the broker accepts the publish ──
 async function publishSensorBatch() {
   const rows = await dbAll(
     'SELECT id, sensor_id, metric, value, recorded_at FROM sensor_buffer WHERE sent = 0 ORDER BY id LIMIT 500'
@@ -559,60 +727,34 @@ async function publishSensorBatch() {
     value: r.value,
     recorded_at: new Date(r.recorded_at * 1000).toISOString(),
   }));
-  cloudClient.publish(
-    `chromacommand/store/${CONFIG.storeId}/telemetry/sensors`,
-    JSON.stringify({ samples }),
-    { qos: 1 }  // PRD §21.1: sensor data must not be lost
-  );
+  await new Promise((resolve, reject) => {
+    cloud.publish(
+      `${CLOUD_PREFIX}/store/${CONFIG.storeId}/telemetry/sensors`,
+      JSON.stringify({ samples }),
+      { qos: 1 },
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
   const ids = rows.map((r) => r.id);
   await dbRun(`UPDATE sensor_buffer SET sent = 1 WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
-  // Trim once flushed for ~24h.
-  await dbRun(`DELETE FROM sensor_buffer WHERE sent = 1 AND recorded_at < ?`,
-    [Math.floor(Date.now() / 1000) - 86_400]);
+  await dbRun('DELETE FROM sensor_buffer WHERE sent = 1 AND recorded_at < ?', [Math.floor(Date.now() / 1000) - 86_400]);
   console.log(`📤 Flushed ${samples.length} telemetry samples`);
 }
 
 setInterval(() => {
-  if (cloudClient.connected) publishSensorBatch().catch(err => console.error('sensor flush:', err.message));
+  if (cloud.connected) publishSensorBatch().catch((err) => console.error('sensor flush:', err.message));
 }, 60_000);
-
-// Public API: local devices POST sensor readings here, gateway batches.
-app.post('/api/v1/sensors/ingest', async (req, res) => {
-  const { sensor_id, metric, value, recorded_at } = req.body || {};
-  if (!sensor_id || !metric || typeof value !== 'number') {
-    return res.status(400).json({ error: 'sensor_id, metric, value required' });
-  }
-  const recAt = recorded_at ? Math.floor(new Date(recorded_at).getTime() / 1000) : Math.floor(Date.now() / 1000);
-  await dbRun(
-    'INSERT INTO sensor_buffer (sensor_id, metric, value, recorded_at) VALUES (?, ?, ?, ?)',
-    [sensor_id, metric, value, recAt]
-  );
-  res.json({ buffered: true });
-});
-
-// ─── Sync Scheduler (Periodically sync with cloud) ────────────────────────
-setInterval(() => {
-  // If disconnected, this won't run until reconnection
-  if (!cloudClient.connected) return;
-  
-  // Request any pending diffs from cloud
-  cloudClient.publish(
-    `chromacommand/store/${CONFIG.storeId}/sync/request`,
-    JSON.stringify({ store_id: CONFIG.storeId, timestamp: Date.now() })
-  );
-}, CONFIG.syncInterval);
 
 // ─── Graceful Shutdown ────────────────────────────────────────────────────
 process.on('SIGINT', () => {
   console.log('\n👋 Shutting down gracefully...');
   db.close();
-  cloudClient.end();
-  httpServer.close();
-  process.exit(0);
+  if (local) local.end(true);
+  cloud.end(false, () => httpServer.close());
+  setTimeout(() => process.exit(0), 1500);
 });
 
-console.log(`🚀 Edge Gateway starting for store: ${CONFIG.storeId}`);
-console.log(`   MQTT Broker: ${CONFIG.mqttBrokerUrl}`);
-console.log(`   Local API: http://localhost:5000`);
-console.log(`   Heartbeat: every ${CONFIG.heartbeatInterval}ms`);
-console.log(`   Sync: every ${CONFIG.syncInterval}ms`);
+console.log(`🚀 Edge Gateway v2 starting for store: ${CONFIG.storeId}`);
+console.log(`   Cloud broker : ${CONFIG.cloudBrokerUrl} (clean=false)`);
+console.log(`   Local bus    : ${CONFIG.localBrokerUrl}`);
+console.log(`   Local API    : http://localhost:5000`);

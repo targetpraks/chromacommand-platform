@@ -68,12 +68,30 @@ export function MatrixView() {
   const queryClient = useQueryClient();
 
   const { data: dbStores, isLoading, refetch } = trpc.stores.list.useQuery(undefined);
+  const { data: presets } = trpc.rgb.listPresets.useQuery();
+  const syncAll = trpc.sync.transform.useMutation({
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [["stores", "list"]] }),
+  });
 
   useLiveSocket((msg) => {
     if (msg.type === "rgb_update" || msg.type === "sync_complete" || msg.type === "audio_update" || msg.type === "store_status") {
       void queryClient.invalidateQueries({ queryKey: [["stores", "list"]] });
     }
   });
+
+  const handleSyncAll = () => {
+    const firstPreset = (presets ?? [])[0];
+    if (!firstPreset) return;
+    if (!window.confirm(`Apply "${firstPreset.name}" to EVERY store in the network?`)) return;
+    syncAll.mutate({
+      scope: "global",
+      targetId: "all",
+      presetId: firstPreset.id,
+      effectiveAt: new Date().toISOString(),
+      fadeDurationMs: 3000,
+      components: { rgb: true, content: true, audio: true },
+    });
+  };
 
   const storeData = dbStores ?? demoStores;
 
@@ -113,8 +131,8 @@ export function MatrixView() {
             >
               <RefreshCw size={12} className={isRefreshing ? "animate-spin" : ""} /> Refresh
             </Button>
-            <Button variant="primary" size="md" className="flex items-center gap-1.5 text-xs font-semibold">
-              <Zap size={12} strokeWidth={2.5} /> Sync All
+            <Button variant="primary" size="md" className="flex items-center gap-1.5 text-xs font-semibold" onClick={handleSyncAll} disabled={syncAll.isPending}>
+              <Zap size={12} strokeWidth={2.5} /> {syncAll.isPending ? "Syncing…" : "Sync All"}
             </Button>
           </div>
         </div>

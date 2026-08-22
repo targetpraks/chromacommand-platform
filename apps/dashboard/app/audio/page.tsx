@@ -10,7 +10,7 @@ export default function AudioPage() {
   const [selectedStore, setSelectedStore] = useState("pp-a01");
   const { data: stores } = trpc.stores.list.useQuery();
   const { data: zones } = trpc.audio.getZoneState.useQuery({ storeId: selectedStore });
-  const { data: playlists } = trpc.audio.getZoneState.useQuery({ storeId: "library" });
+  const { data: playlists } = trpc.audio.listPlaylists.useQuery();
   const audioMutation = trpc.audio.set.useMutation();
   const announceMutation = trpc.audio.announce.useMutation();
 
@@ -52,12 +52,29 @@ export default function AudioPage() {
                       >
                         {z.status === "playing" ? <Pause size={12} /> : <Play size={12} />}
                       </Button>
-                      <Button variant="ghost" size="sm"><SkipForward size={12} /></Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => audioMutation.mutate({ scope: "store", targetId: selectedStore, zone: z.zoneType, action: "skip" })}
+                      >
+                        <SkipForward size={12} />
+                      </Button>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button className="text-on-dark-secondary hover:text-on-surface"><VolumeX size={12} /></button>
-                    <ProgressBar value={z.volume || 0} variant="info" className="flex-1" />
+                    <button
+                      className="text-on-dark-secondary hover:text-on-surface"
+                      onClick={() => audioMutation.mutate({ scope: "store", targetId: selectedStore, zone: z.zoneType, action: (z.volume ?? 0) === 0 ? "unmute" : "mute" })}
+                    >
+                      <VolumeX size={12} />
+                    </button>
+                    <input
+                      type="range" min={0} max={1} step={0.05} value={z.volume || 0}
+                      onChange={(e) => { /* local visual only — committed onMouseUp */ }}
+                      onMouseUp={(e) => audioMutation.mutate({ scope: "store", targetId: selectedStore, zone: z.zoneType, action: "volume", volume: parseFloat((e.target as HTMLInputElement).value) })}
+                      onTouchEnd={(e) => audioMutation.mutate({ scope: "store", targetId: selectedStore, zone: z.zoneType, action: "volume", volume: parseFloat((e.target as HTMLInputElement).value) })}
+                      className="flex-1 accent-gold"
+                    />
                     <span className="text-[10px] text-on-dark-secondary w-7 text-right">{Math.round((z.volume || 0) * 100)}%</span>
                   </div>
                 </div>
@@ -93,10 +110,13 @@ export default function AudioPage() {
                 >
                   <div className="w-8 h-8 rounded-lg shrink-0 bg-navy border border-white/10" />
                   <div className="flex-1">
-                    <p className="text-xs font-medium">{pl.sinkName || pl.zoneType || "Playlist"}</p>
-                    <p className="text-[10px] text-on-dark-secondary">{pl.tags?.join(", ") || pl.status || "Playlist"}</p>
+                    <p className="text-xs font-medium">{pl.name}</p>
+                    <p className="text-[10px] text-on-dark-secondary">{pl.tags?.join(", ") || `${pl.tracks?.length ?? 0} tracks`}</p>
                   </div>
-                  <button className="w-6 h-6 flex items-center justify-center bg-panel rounded hover:bg-gold hover:text-navy transition">
+                  <button
+                    className="w-6 h-6 flex items-center justify-center bg-panel rounded hover:bg-gold hover:text-navy transition"
+                    onClick={() => audioMutation.mutate({ scope: "store", targetId: selectedStore, zone: "dining", action: "play", playlistId: pl.id, source: "local" })}
+                  >
                     <Play size={10} />
                   </button>
                 </motion.div>

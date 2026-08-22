@@ -12,7 +12,7 @@ export function LogoutButton({ all = false }: { all?: boolean }) {
 
   async function handle() {
     try {
-      if (all) await logoutAll.mutateAsync();
+      if (all) await logoutAll.mutateAsync(undefined);
       else await logout.mutateAsync({ refreshToken: undefined });
     } catch {
       /* token might be invalid */

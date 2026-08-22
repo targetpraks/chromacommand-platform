@@ -83,6 +83,7 @@ services:
     command: npm run dev --workspace=@chromacommand/dashboard
 
   # Per-store edge gateway for local end-to-end testing.
+  # In dev the "local device bus" is the same broker as the cloud one.
   # Comment out when iterating on cloud services only.
   edge-gateway:
     build:
@@ -93,6 +94,7 @@ services:
       STORE_ID: pp-a01
       REGION_ID: cape-town
       MQTT_BROKER_URL: mqtt://localhost:1883
+      LOCAL_MQTT_URL: mqtt://localhost:1883
       DB_PATH: /data/edge_cache.db
       HEARTBEAT_INTERVAL: 30000
     volumes:

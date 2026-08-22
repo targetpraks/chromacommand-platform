@@ -25,9 +25,20 @@ echo "=== ChromaCommand Edge Gateway provisioning ==="
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl jq openssh-client docker.io docker-compose-plugin \
-  ufw chrony
+  ufw chrony mosquitto
 
-systemctl enable --now docker chrony
+systemctl enable --now docker chrony mosquitto
+
+# Local device bus (LED controllers, kiosks, audio nodes all speak MQTT
+# against this broker on the gateway host). Anonymous on the LAN interface;
+# the gateway's UFW rules restrict which ports are reachable store-wide.
+cat > /etc/mosquitto/conf.d/chromacommand.conf <<'MOSQ'
+listener 1883 0.0.0.0
+allow_anonymous true
+persistence true
+persistence_location /var/lib/mosquitto/
+MOSQ
+systemctl restart mosquitto
 
 # ── 2. User + directories ─────────────────────────────────────────────────
 id -u chromacommand &>/dev/null || useradd --system --home-dir "$CC_DATA" --shell /usr/sbin/nologin chromacommand
@@ -76,12 +87,12 @@ cat > "$CC_HOME/edge.env" <<EOF
 STORE_ID=$STORE_ID
 REGION_ID=$REGION_ID
 MQTT_BROKER_URL=$BROKER_URL
+LOCAL_MQTT_URL=mqtt://localhost:1883
 MQTT_CLIENT_CERT=/etc/chromacommand/cert.pem
 MQTT_CLIENT_KEY=/etc/chromacommand/key.pem
 MQTT_CA_CERT=/etc/chromacommand/ca.pem
 DB_PATH=/data/edge_cache.db
 HEARTBEAT_INTERVAL=30000
-SYNC_INTERVAL=60000
 EOF
 chmod 0640 "$CC_HOME/edge.env"
 chown root:chromacommand "$CC_HOME/edge.env"
@@ -90,8 +101,8 @@ chown root:chromacommand "$CC_HOME/edge.env"
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp                # SSH (consider locking to mgmt VLAN)
-ufw allow 5000/tcp              # Local REST/WS for in-store devices
-ufw allow 5353/udp              # screen-discovery multicast
+ufw allow 5000/tcp              # Local REST for in-store techs/sensors
+ufw allow 1883/tcp              # Local MQTT device bus (in-store devices)
 ufw --force enable
 
 # ── 7. systemd unit for the docker container ──────────────────────────────
