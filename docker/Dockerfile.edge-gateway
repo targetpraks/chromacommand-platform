@@ -32,6 +32,9 @@ COPY apps/edge-gateway/gateway.js ./gateway.js
 # SQLite cache + cert volume.
 VOLUME ["/data", "/etc/chromacommand"]
 
+# Ensure the node user (uid 1000) owns /data so SQLite can create its cache.
+RUN mkdir -p /data && chown 1000:1000 /data
+
 ENV DB_PATH=/data/edge_cache.db \
     NODE_ENV=production
 
@@ -42,6 +45,6 @@ EXPOSE 5000
 USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:5000/health || exit 1
+  CMD node -e "require('http').get('http://127.0.0.1:5000/health',r=>process.exit(r.statusCode!==200)).on('error',()=>process.exit(1))"
 
 CMD ["node", "gateway.js"]

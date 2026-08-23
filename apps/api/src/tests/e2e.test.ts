@@ -17,7 +17,7 @@ try {
 }
 const describeIf = apiUp ? describe : describe.skip;
 
-async function login(email: string, password = "dev"): Promise<string> {
+async function login(email: string, password = "freakazoid"): Promise<string> {
   const res = await fetch(`${baseURL}/api/trpc/auth.login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

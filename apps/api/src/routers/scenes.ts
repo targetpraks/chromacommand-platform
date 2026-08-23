@@ -64,7 +64,9 @@ export const scenesRouter = router({
    * Trigger a scene on a scope. Fan-out covers RGB + content + audio in one
    * pass; every store gets all three component commands.
    */
-  trigger: requireScope<{ sceneId?: string }>(() => [])
+  trigger: requireScope<{ sceneId?: string; scope?: string; targetId?: string }>((i) =>
+    scopeFromRequest({ scope: i.scope ?? "global", targetId: i.targetId ?? "all" })
+  )
     .input(
       z.object({
         sceneId: z.string(),

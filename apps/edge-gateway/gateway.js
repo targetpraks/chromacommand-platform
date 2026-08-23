@@ -68,6 +68,10 @@ db.serialize(() => {
       updated_at INTEGER DEFAULT (strftime('%s','now'))
     )
   `);
+  // Schema-drift guards: v2 adds columns that CREATE IF NOT EXISTS won't add
+  // to pre-existing v1 volumes. These are no-ops on fresh installs.
+  db.run(`ALTER TABLE led_state ADD COLUMN segments TEXT`, () => {});
+  db.run(`ALTER TABLE audio_state ADD COLUMN source TEXT DEFAULT 'local'`, () => {});
   db.run(`
     CREATE TABLE IF NOT EXISTS content_manifest (
       screen_id TEXT PRIMARY KEY,

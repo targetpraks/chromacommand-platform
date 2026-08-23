@@ -13,3 +13,8 @@ client.connect().catch((err) => {
 });
 
 export const db = drizzle(client, { schema });
+
+/** Close the underlying connection — lets one-shot scripts (seed) exit cleanly. */
+export async function closeDatabase(): Promise<void> {
+  await client.end();
+}

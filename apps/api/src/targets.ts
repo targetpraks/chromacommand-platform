@@ -1,5 +1,5 @@
 import { db } from "@chromacommand/database";
-import { stores } from "@chromacommand/database/schema";
+import { stores, provinces, cities } from "@chromacommand/database/schema";
 import { eq } from "drizzle-orm";
 
 export interface ResolvedTargets {
@@ -76,9 +76,37 @@ export async function scopeCoversStore(claim: string, storeId: string): Promise<
 }
 
 /**
+ * Resolve the ancestry chain of a geo node so we can test whether a user's
+ * claim at any ancestor level authorizes control of the target.
+ * Returns the set of canonical scope strings that ALL cover this node:
+ *   city X  → { region:X, province:P, country:C }
+ *   province P → { province:P, country:C }
+ *   country C → { country:C }
+ */
+async function ancestorClaims(scope: string, targetId: string): Promise<string[]> {
+  if (scope === "country") return [`country:${targetId}`];
+
+  if (scope === "province") {
+    const [prov] = await db.select().from(provinces).where(eq(provinces.id, targetId)).limit(1);
+    if (!prov) return [`province:${targetId}`];
+    return [`province:${targetId}`, `country:${prov.countryId}`];
+  }
+
+  if (scope === "region" || scope === "city") {
+    const [city] = await db.select().from(cities).where(eq(cities.id, targetId)).limit(1);
+    if (!city) return [`region:${targetId}`];
+    const [prov] = await db.select().from(provinces).where(eq(provinces.id, city.provinceId)).limit(1);
+    return [`region:${targetId}`, `province:${city.provinceId}`, ...(prov ? [`country:${prov.countryId}`] : [])];
+  }
+
+  return [`${scope}:${targetId}`];
+}
+
+/**
  * Authorization check with geo-tree expansion: every required scope must be
- * satisfied either verbatim or by an ancestor geo claim. Loads all stores
- * once per call so N required scopes don't cause N round-trips.
+ * satisfied either verbatim or by an ancestor geo claim. Required non-store
+ * scopes (region/province/country) are covered when the user holds any claim
+ * in that node's ancestry chain.
  */
 export async function satisfiesScopes(userScopes: string[], required: string[]): Promise<boolean> {
   if (required.length === 0) return true;
@@ -87,19 +115,31 @@ export async function satisfiesScopes(userScopes: string[], required: string[]):
   const missingVerbatim = required.filter((r) => !userScopes.includes(r));
   if (missingVerbatim.length === 0) return true;
 
-  const storeClaims = missingVerbatim.filter((r) => r.startsWith("store:"));
-  const otherMissing = missingVerbatim.filter((r) => !r.startsWith("store:"));
-  if (otherMissing.length > 0) return false; // non-store scopes have no ancestor expansion
+  for (const req of missingVerbatim) {
+    const sep = req.indexOf(":");
+    if (sep < 0) return false;
+    const level = req.slice(0, sep);
+    const id = req.slice(sep + 1);
 
-  for (const req of storeClaims) {
-    const storeId = req.slice("store:".length);
-    let covered = false;
-    for (const claim of userScopes) {
-      if (await scopeCoversStore(claim, storeId)) {
-        covered = true;
-        break;
+    if (level === "store") {
+      let covered = false;
+      for (const claim of userScopes) {
+        if (await scopeCoversStore(claim, id)) {
+          covered = true;
+          break;
+        }
       }
+      if (!covered) return false;
+      continue;
     }
+
+    if (level === "global") {
+      return false; // only "*" authorizes global, already checked above
+    }
+
+    // Geo-node required: covered if the user holds any ancestor claim.
+    const claims = await ancestorClaims(level, id);
+    const covered = claims.some((c) => userScopes.includes(c));
     if (!covered) return false;
   }
   return true;

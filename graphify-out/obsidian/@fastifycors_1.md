@@ -1,0 +1,17 @@
+---
+source_file: "apps/api/package.json"
+type: "concept"
+community: "Community 1"
+location: "L16"
+tags:
+  - graphify/concept
+  - graphify/EXTRACTED
+  - community/Community_1
+---
+
+# @fastify/cors
+
+## Connections
+- [[@fastifycors]] - `imports` [EXTRACTED]
+
+#graphify/concept #graphify/EXTRACTED #community/Community_1

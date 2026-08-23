@@ -130,9 +130,7 @@ export const contentRouter = router({
    * otherwise every store under the scope gets an assignment row and the
    * playlist is pushed live.
    */
-  assignPlaylist: requireScope<{ scope: string; targetId?: string }>((i) =>
-    i.scope === "store" ? [`store:${i.targetId}`] : []
-  )
+  assignPlaylist: requireScope<{ scope: string; targetId: string }>((i) => scopeFromRequest(i))
     .input(
       z.object({
         playlistId: z.string(),
@@ -198,9 +196,7 @@ export const contentRouter = router({
     }),
 
   /** Push a single asset full-screen (promo/takeover burst). */
-  pushAsset: requireScope<{ scope: string; targetId?: string }>((i) =>
-    i.scope === "store" ? [`store:${i.targetId}`] : []
-  )
+  pushAsset: requireScope<{ scope: string; targetId: string }>((i) => scopeFromRequest(i))
     .input(
       z.object({
         scope: z.enum(["global", "country", "province", "region", "city", "store"]),

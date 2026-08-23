@@ -1,4 +1,4 @@
-import { db } from "./index";
+import { db, closeDatabase } from "./index";
 import * as schema from "./schema";
 import { eq, sql } from "drizzle-orm";
 
@@ -303,7 +303,11 @@ async function seed() {
   console.log(`   6 users (one per role), ${telemetryRows.length} telemetry samples, ${stores.length} gateway heartbeats`);
 }
 
-seed().catch((err) => {
-  console.error("❌ Seed failed:", err);
-  process.exit(1);
-});
+seed()
+  .then(() => closeDatabase())
+  .then(() => process.exit(0))
+  .catch(async (err) => {
+    console.error("❌ Seed failed:", err);
+    await closeDatabase();
+    process.exit(1);
+  });

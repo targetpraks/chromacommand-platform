@@ -1,4 +1,5 @@
 import { router, protectedProcedure, requireScope, requireRole } from "../trpc";
+import { TRPCError } from "@trpc/server";
 import { scopeFromRequest } from "../scope";
 import { z } from "zod";
 import { db } from "@chromacommand/database";
@@ -6,6 +7,7 @@ import { ledZones, rgbPresets, activityLog } from "@chromacommand/database/schem
 import { eq, inArray } from "drizzle-orm";
 import { broadcast } from "../live";
 import { dispatchToStores } from "../dispatch";
+import { satisfiesScopes } from "../targets";
 
 export const RGB_MODES = ["solid", "gradient", "pulse", "chase", "breath", "sparkle", "wave", "rainbow"] as const;
 
@@ -131,9 +133,7 @@ export const rgbRouter = router({
       );
     }),
 
-  set: requireScope<z.infer<typeof setInput>>((i) =>
-    i.scope === "store" ? [`store:${i.targetId}`] : []
-  )
+  set: requireScope<z.infer<typeof setInput>>((i) => scopeFromRequest(i))
     .input(setInput)
     .mutation(async ({ input, ctx }) => {
       const set = {
@@ -202,9 +202,7 @@ export const rgbRouter = router({
     }),
 
   /** All zones off across a scope. */
-  blackout: requireScope<{ scope: string; targetId: string }>((i) =>
-    i.scope === "store" ? [`store:${i.targetId}`] : []
-  )
+  blackout: requireScope<{ scope: string; targetId: string }>((i) => scopeFromRequest(i))
     .input(z.object({ scope: z.enum(["global", "country", "province", "region", "city", "store"]), targetId: z.string(), fadeMs: z.number().min(0).max(10000).default(1000) }))
     .mutation(async ({ input, ctx }) => {
       const { commandId, storeIds } = await dispatchToStores({
@@ -234,11 +232,17 @@ export const rgbRouter = router({
     }),
 
   /** Flash one zone white so techs can find it on-site. */
-  identify: requireScope<{ zoneId: string }>(() => [])
+  identify: protectedProcedure
     .input(z.object({ zoneId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const [zone] = await db.select().from(ledZones).where(eq(ledZones.id, input.zoneId)).limit(1);
       if (!zone) throw new Error("Zone not found");
+
+      // Explicit authorization: the zone's store must be in the user's scope.
+      const authed = await satisfiesScopes(ctx.user?.scope ?? [], [`store:${zone.storeId}`]);
+      if (!authed) {
+        throw new TRPCError({ code: "FORBIDDEN", message: `Missing required scope: store:${zone.storeId}` });
+      }
 
       const { commandId } = await dispatchToStores({
         kind: "rgb.identify",
