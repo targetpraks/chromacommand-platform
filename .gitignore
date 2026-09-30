@@ -11,3 +11,6 @@ coverage/
 .vitest/
 .pnpm-store/
 edge_cache.db
+
+# Graphify generated output (regenerable: graphify .)
+graphify-out/
